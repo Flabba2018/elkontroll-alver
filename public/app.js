@@ -1,0 +1,1341 @@
+// ============================================
+// ELKONTROLL APP - ALVER KOMMUNE
+// Med Supabase database-integrasjon
+// ============================================
+
+const STORAGE_KEY = 'elkontroll_';
+
+// Standard sjekkpunkt
+// Sjekkpunkt frå MAL_ELKONTROLL.doc (KAP.5.4)
+const defaultItems = [
+  // SIDE 1 - Inntak, Fordelinger, Målinger, Jording
+  { id: '1.1', cat: 'Inntak', catNum: 1, text: 'Inntakskabel er betryggende festet til underlag og er fri for skader' },
+  { id: '1.2', cat: 'Inntak', catNum: 1, text: 'Er kabel beskyttet med halvrør eller likn? (ute på vegg)' },
+  { id: '1.3', cat: 'Inntak', catNum: 1, text: 'Er kapslingsgrad/avdekking ivaretatt? (Usakkyndig=IP2XC/IP3X, Sakkyndig=IP2X)' },
+  { id: '2.1', cat: 'Fordelinger', catNum: 2, text: 'Fordeling/sikringsskap er merket med nr./navn og nominell spenning' },
+  { id: '2.2', cat: 'Fordelinger', catNum: 2, text: 'Fordeling er merket med skilt på dør dersom kun for sakkyndig/instruert personell' },
+  { id: '2.3', cat: 'Fordelinger', catNum: 2, text: 'Kursfortegnelse er oppdatert' },
+  { id: '2.4', cat: 'Fordelinger', catNum: 2, text: 'Alle komponenter er tilfredsstillende merket' },
+  { id: '2.5', cat: 'Fordelinger', catNum: 2, text: 'Er vern riktig montert/innstilt iht. ledertverrsnitt og leverandørens spesifikasjoner' },
+  { id: '2.6', cat: 'Fordelinger', catNum: 2, text: 'Er kabelgjennomføringer og branntetting OK?' },
+  { id: '2.7', cat: 'Fordelinger', catNum: 2, text: 'Bruksanvisning til jordfeilbryter/varsling er montert' },
+  { id: '2.8', cat: 'Fordelinger', catNum: 2, text: 'Overspenningsvern er kontrollert og OK' },
+  { id: '2.9', cat: 'Fordelinger', catNum: 2, text: 'Kontrollert varmgang i tilkoblinger, utstyr og ledere' },
+  { id: '2.10', cat: 'Fordelinger', catNum: 2, text: 'Aluminiumstilkoblinger er utført riktig' },
+  { id: '2.11', cat: 'Fordelinger', catNum: 2, text: 'Jordfeilbrytere/jordfeilautomater testes og er sjekket riktig kurs og størrelse' },
+  { id: '3.1', cat: 'Målinger', catNum: 3, text: 'Isolasjonsmåling utført (før 01.01.99: >0,23 MΩ, etter: >0,5 MΩ)' },
+  { id: '3.2', cat: 'Målinger', catNum: 3, text: 'Spenningsmåling' },
+  { id: '3.3', cat: 'Målinger', catNum: 3, text: 'Kontinuitetsmåling av jord og utjevningsforbindelser' },
+  { id: '4.1', cat: 'Jording', catNum: 4, text: 'Hovedjord og utjevningsforbindelser er riktig utført og merket' },
+  { id: '4.2', cat: 'Jording', catNum: 4, text: 'Kontroller at det er kun ein jordleder under kvar tilkobling' },
+  { id: '4.3', cat: 'Jording', catNum: 4, text: 'Jordelektroder er montert og dokumentert' },
+  { id: '4.4', cat: 'Jording', catNum: 4, text: 'Kontroller at det ikkje er jordet og ujordet installasjon i samme rom' },
+  { id: '4.5', cat: 'Jording', catNum: 4, text: 'Er det foretatt kontinuitetsmåling, og i så fall er verdier OK?' },
+  // SIDE 2 - Generelt, Varmekabel, Våtrom, Utvendig
+  { id: '5.1', cat: 'Generelt', catNum: 5, text: 'Kabler er betryggende festet og mekanisk beskyttet' },
+  { id: '5.2', cat: 'Generelt', catNum: 5, text: 'Kabelgjennomføringer er forskriftsmessig tettet med godkjent produkt' },
+  { id: '5.3', cat: 'Generelt', catNum: 5, text: 'Alt materiell og utstyr er av godkjent kvalitet' },
+  { id: '5.4', cat: 'Generelt', catNum: 5, text: 'Skjøteledninger er i forskriftsmessig stand' },
+  { id: '5.5', cat: 'Generelt', catNum: 5, text: 'Utstyr som ikkje er i bruk, er i forskriftsmessig stand eller frakoblet' },
+  { id: '5.6', cat: 'Generelt', catNum: 5, text: 'Belysning er kontrollert for varmgang, funksjonalitet og renhold' },
+  { id: '5.7', cat: 'Generelt', catNum: 5, text: 'Ovner har tilstrekkelig/god avstand til brennbart materiale' },
+  { id: '5.8', cat: 'Generelt', catNum: 5, text: 'Flyttbare varmeovner er godkjent' },
+  { id: '5.9', cat: 'Generelt', catNum: 5, text: 'Sjekk VVB tilkoblinger, stikk, støpsel, kabel og koblingshus' },
+  { id: '6.1', cat: 'Varmekabelanlegg', catNum: 6, text: 'Skjult varme har forankoblet jordfeilbryter 30mA' },
+  { id: '6.2', cat: 'Varmekabelanlegg', catNum: 6, text: 'Forskriftsmessig montert' },
+  { id: '6.3', cat: 'Varmekabelanlegg', catNum: 6, text: 'Varmeanlegget er korrekt merket og dokumentert' },
+  { id: '6.4', cat: 'Varmekabelanlegg', catNum: 6, text: 'Utvendige anlegg er merket med lett synlig skilt som angir anleggets utstrekning' },
+  { id: '6.5', cat: 'Varmekabelanlegg', catNum: 6, text: 'Kontroller at deler av anlegget ikkje er udekket' },
+  { id: '6.6', cat: 'Varmekabelanlegg', catNum: 6, text: 'Foreta jordfeilmåling av anlegget, noter måleresultat' },
+  { id: '7.1', cat: 'Våtrom', catNum: 7, text: 'Kapslingsgrad er ivaretatt' },
+  { id: '7.2', cat: 'Våtrom', catNum: 7, text: 'Soneinndeling er ivaretatt' },
+  { id: '7.3', cat: 'Våtrom', catNum: 7, text: '30 mA jordfeilbryter er montert, testet og merket' },
+  { id: '7.4', cat: 'Våtrom', catNum: 7, text: 'Brytere har allpolig brudd' },
+  { id: '7.5', cat: 'Våtrom', catNum: 7, text: 'Lavvoltutstyr er forskriftsmessig montert og dokumentert' },
+  { id: '8.1', cat: 'Utvendige anlegg', catNum: 8, text: 'Brytere er forskriftsmessig montert og er allpolig' },
+  { id: '8.2', cat: 'Utvendige anlegg', catNum: 8, text: 'Kabler over terreng er tilstrekkelig mekanisk beskyttet og fri for skade' },
+  { id: '8.3', cat: 'Utvendige anlegg', catNum: 8, text: 'Det er montert 30mA jordfeilbryter for stikkontakter' },
+  { id: '8.4', cat: 'Utvendige anlegg', catNum: 8, text: 'Kapslingsgrad og høyde over bakke er ivaretatt' },
+  { id: '8.5', cat: 'Utvendige anlegg', catNum: 8, text: 'Utjevning/jordelektrode er korrekt utført' },
+  { id: '8.6', cat: 'Utvendige anlegg', catNum: 8, text: 'Kabler i bakken er godkjent for dette' },
+  { id: '8.7', cat: 'Utvendige anlegg', catNum: 8, text: 'Luftledninger har tilstrekkelig høgde og er av godkjent type' }
+];
+
+const categories = [
+  { num: 1, name: 'Inntak', page: 1 },
+  { num: 2, name: 'Fordelinger', page: 1 },
+  { num: 3, name: 'Målinger', page: 1 },
+  { num: 4, name: 'Jording', page: 1 },
+  { num: 5, name: 'Generelt', page: 2 },
+  { num: 6, name: 'Varmekabelanlegg', page: 2 },
+  { num: 7, name: 'Våtrom', page: 2 },
+  { num: 8, name: 'Utvendige anlegg', page: 2 }
+];
+
+const photoTypes = ['Sikringsskap', 'Kursfortegnelse', 'Oversikt', 'Avvik', 'Anna'];
+const unitSuffixes = ['H0101','H0102','H0103','H0201','H0202','H0203','H0301','H0302','Leil. A','Leil. B','Leil. C','Kjellar','Loft','Garasje'];
+
+// ============================================
+// STATE
+// ============================================
+let state = {
+  isLoggedIn: false,
+  currentUser: null,
+  users: [],
+  view: 'login',
+  items: [],
+  photos: [],
+  form: {
+    address: '', suffix: '', workOrder: '',
+    date: new Date().toISOString().split('T')[0],
+    voltage: '', insulation: '', continuity: '', rcd: '',
+    summary: '', errorsFixed: false, maintenance: false, sentInstaller: false,
+    isExternal: false, externalFirma: '', externalContact: ''
+  },
+  expanded: { 1: true },
+  inspections: [],
+  search: '',
+  viewInspection: null,
+  modal: null,
+  toast: null,
+  isOnline: navigator.onLine,
+  pendingSync: [],
+  isSyncing: false,
+  isLoading: true
+};
+
+// ============================================
+// LOCAL STORAGE
+// ============================================
+function saveLocal(k, d) {
+  try { localStorage.setItem(STORAGE_KEY + k, JSON.stringify(d)); } catch(e) {}
+}
+function loadLocal(k, def) {
+  try { const d = localStorage.getItem(STORAGE_KEY + k); return d ? JSON.parse(d) : def; } catch(e) { return def; }
+}
+
+// ============================================
+// SUPABASE FUNCTIONS
+// ============================================
+async function fetchUsers() {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('active', true)
+      .order('name');
+    
+    if (error) throw error;
+    state.users = data || [];
+    console.log('✅ Henta brukarar:', state.users.length);
+  } catch (e) {
+    console.error('❌ Feil ved henting av brukarar:', e);
+    // Fallback til lokale brukarar
+    state.users = loadLocal('users', [
+      { id: '1', name: 'Cato', role: 'admin' },
+      { id: '2', name: 'Kristian', role: 'user' },
+      { id: '3', name: 'Bjørn Inge', role: 'user' }
+    ]);
+  }
+}
+
+async function fetchInspections() {
+  try {
+    const { data, error } = await supabase
+      .from('inspections')
+      .select('*')
+      .order('inspection_date', { ascending: false })
+      .limit(100);
+    
+    if (error) throw error;
+    state.inspections = data || [];
+    saveLocal('inspections', state.inspections);
+    console.log('✅ Henta kontrollar:', state.inspections.length);
+  } catch (e) {
+    console.error('❌ Feil ved henting av kontrollar:', e);
+    state.inspections = loadLocal('inspections', []);
+  }
+}
+
+async function saveInspectionToSupabase(inspection) {
+  try {
+    // 1. Lagre hovud-inspeksjon
+    const { data: inspData, error: inspError } = await supabase
+      .from('inspections')
+      .insert({
+        address: inspection.address,
+        suffix: inspection.suffix,
+        full_address: inspection.fullAddress,
+        user_id: state.currentUser.id,
+        inspection_date: inspection.date,
+        work_order: inspection.workOrder || null,
+        is_external: inspection.form.isExternal,
+        external_firma: inspection.form.externalFirma || null,
+        external_contact: inspection.form.externalContact || null,
+        voltage: inspection.form.voltage || null,
+        insulation: inspection.form.insulation || null,
+        continuity: inspection.form.continuity || null,
+        rcd_test: inspection.form.rcd || null,
+        errors_fixed: inspection.form.errorsFixed,
+        maintenance_noted: inspection.form.maintenance,
+        sent_installer: inspection.form.sentInstaller,
+        summary: inspection.form.summary || null,
+        total_items: inspection.items.length,
+        checked_items: inspection.items.filter(i => i.checked).length,
+        deviation_count: inspection.items.filter(i => i.deviation).length,
+        corrected_count: inspection.items.filter(i => i.corrected).length,
+        progress: inspection.progress
+      })
+      .select()
+      .single();
+    
+    if (inspError) throw inspError;
+    
+    const inspectionId = inspData.id;
+    
+    // 2. Lagre sjekkpunkt
+    const itemsToInsert = inspection.items.map(item => ({
+      inspection_id: inspectionId,
+      item_id: item.id,
+      category: item.cat,
+      category_num: item.catNum,
+      item_text: item.text,
+      checked: item.checked,
+      deviation: item.deviation,
+      corrected: item.corrected,
+      requires_installer: item.installer,
+      comment: item.comment || null
+    }));
+    
+    const { error: itemsError } = await supabase
+      .from('inspection_items')
+      .insert(itemsToInsert);
+    
+    if (itemsError) throw itemsError;
+    
+    // 3. Lagre bilete (viss det finst)
+    if (inspection.photos && inspection.photos.length > 0) {
+      const photosToInsert = inspection.photos.map(photo => ({
+        inspection_id: inspectionId,
+        photo_type: photo.type.toLowerCase(),
+        photo_data: photo.data,
+        description: null
+      }));
+      
+      const { error: photosError } = await supabase
+        .from('inspection_photos')
+        .insert(photosToInsert);
+      
+      if (photosError) console.error('Bilete-feil:', photosError);
+    }
+    
+    // 4. Lagre avvik
+    const deviations = inspection.items.filter(i => i.deviation);
+    if (deviations.length > 0) {
+      const devsToInsert = deviations.map(dev => ({
+        inspection_id: inspectionId,
+        item_id: dev.id,
+        item_text: dev.text,
+        comment: dev.comment || null,
+        corrected: dev.corrected,
+        requires_installer: dev.installer
+      }));
+      
+      const { error: devsError } = await supabase
+        .from('deviations')
+        .insert(devsToInsert);
+      
+      if (devsError) console.error('Avvik-feil:', devsError);
+    }
+    
+    console.log('✅ Lagra til Supabase:', inspectionId);
+    return inspectionId;
+    
+  } catch (e) {
+    console.error('❌ Supabase lagring feila:', e);
+    throw e;
+  }
+}
+
+async function syncPendingData() {
+  if (!state.isOnline || state.isSyncing || state.pendingSync.length === 0) return;
+  
+  state.isSyncing = true;
+  render();
+  
+  const pending = [...state.pendingSync];
+  const synced = [];
+  
+  for (const item of pending) {
+    try {
+      await saveInspectionToSupabase(item);
+      synced.push(item.localId);
+    } catch (e) {
+      console.error('Synk feila for:', item.localId);
+    }
+  }
+  
+  state.pendingSync = state.pendingSync.filter(p => !synced.includes(p.localId));
+  saveLocal('pendingSync', state.pendingSync);
+  
+  if (synced.length > 0) {
+    showToast(`✅ Synkroniserte ${synced.length} kontroll(ar)`);
+    await fetchInspections();
+  }
+  
+  state.isSyncing = false;
+  render();
+}
+
+// ============================================
+// INIT
+// ============================================
+async function init() {
+  state.isLoading = true;
+  state.pendingSync = loadLocal('pendingSync', []);
+  
+  // Sjekk innlogging
+  const savedUser = loadLocal('currentUser', null);
+  
+  // Hent data
+  await fetchUsers();
+  await fetchInspections();
+  
+  if (savedUser && state.users.find(u => u.id === savedUser.id)) {
+    state.currentUser = savedUser;
+    state.isLoggedIn = true;
+    state.view = 'home';
+  }
+  
+  resetForm();
+  state.isLoading = false;
+  render();
+  
+  // Synk pending data
+  if (state.isOnline) {
+    syncPendingData();
+  }
+}
+
+function resetForm() {
+  state.items = defaultItems.map(i => ({
+    ...i, checked: false, comment: '', deviation: false, corrected: false, installer: false
+  }));
+  state.photos = [];
+  state.form = {
+    address: '', suffix: '', workOrder: '',
+    date: new Date().toISOString().split('T')[0],
+    voltage: '', insulation: '', continuity: '', rcd: '',
+    summary: '', errorsFixed: false, maintenance: false, sentInstaller: false,
+    isExternal: false, externalFirma: '', externalContact: ''
+  };
+  state.expanded = { 1: true };
+}
+
+// ============================================
+// HELPERS
+// ============================================
+function getFullAddress() {
+  return state.form.suffix ? `${state.form.address} - ${state.form.suffix}` : state.form.address;
+}
+function getProgress() {
+  return Math.round((state.items.filter(i => i.checked).length / state.items.length) * 100);
+}
+function getDeviations() {
+  return state.items.filter(i => i.deviation);
+}
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+function showToast(msg, type = 'success') {
+  state.toast = { msg, type };
+  render();
+  setTimeout(() => { state.toast = null; render(); }, 3000);
+}
+
+// Online/Offline
+window.addEventListener('online', () => {
+  state.isOnline = true;
+  render();
+  syncPendingData();
+});
+window.addEventListener('offline', () => {
+  state.isOnline = false;
+  render();
+});
+
+// ============================================
+// SAVE INSPECTION
+// ============================================
+async function saveInspection(download = false) {
+  const inspection = {
+    localId: genId(),
+    fullAddress: getFullAddress(),
+    address: state.form.address,
+    suffix: state.form.suffix,
+    date: state.form.date,
+    user: state.currentUser.name,
+    userId: state.currentUser.id,
+    workOrder: state.form.workOrder,
+    items: JSON.parse(JSON.stringify(state.items)),
+    photos: [...state.photos],
+    form: JSON.parse(JSON.stringify(state.form)),
+    deviationCount: getDeviations().length,
+    progress: getProgress(),
+    timestamp: new Date().toISOString()
+  };
+  
+  // Lagre lokalt først
+  const localInspections = loadLocal('inspections_local', []);
+  localInspections.unshift(inspection);
+  saveLocal('inspections_local', localInspections.slice(0, 50));
+  
+  // Prøv å lagre til Supabase
+  if (state.isOnline) {
+    try {
+      await saveInspectionToSupabase(inspection);
+      showToast('✅ Kontroll lagra!');
+      await fetchInspections();
+    } catch (e) {
+      // Legg til pending sync
+      state.pendingSync.push(inspection);
+      saveLocal('pendingSync', state.pendingSync);
+      showToast('💾 Lagra lokalt - synkar seinare', 'warning');
+    }
+  } else {
+    state.pendingSync.push(inspection);
+    saveLocal('pendingSync', state.pendingSync);
+    showToast('💾 Lagra lokalt (offline)', 'warning');
+  }
+  
+  if (download) {
+    downloadWord(inspection);
+  }
+  
+  state.modal = null;
+  resetForm();
+  state.view = 'home';
+  render();
+}
+
+// ============================================
+// WORD GENERATION - MAL_ELKONTROLL.doc FORMAT
+// KAP.5.4 Internkontroll Elektro - Alver Kommune
+// ============================================
+function generateWordHTML(insp) {
+  const items = insp.items || [];
+  const devs = items.filter(i => i.deviation);
+  const form = insp.form || {};
+  const fullAddr = insp.full_address || insp.fullAddress || '';
+  const inspDate = insp.inspection_date || insp.date || '';
+  const inspector = insp.user || state.currentUser?.name || '';
+  const workOrder = insp.work_order || insp.workOrder || '';
+  const unit = form.unit || insp.unit || 'Teknisk Forvaltning og Drift';
+  
+  // Hjelpefunksjon for avkryssingsboks
+  const check = (val) => val ? '☑' : '☐';
+  
+  // Generer rader for side 1 (Inntak, Fordelinger, Målinger, Jording)
+  const page1Cats = [1, 2, 3, 4];
+  let page1Rows = '';
+  page1Cats.forEach(catNum => {
+    const catItems = items.filter(i => i.catNum === catNum);
+    const catName = categories.find(c => c.num === catNum)?.name || '';
+    if (catItems.length > 0) {
+      page1Rows += `<tr style="background:#d9d9d9;"><td colspan="5" style="border:1px solid #000;padding:3px;font-weight:bold;">${catName}</td></tr>`;
+      catItems.forEach(item => {
+        page1Rows += `<tr>
+          <td style="border:1px solid #000;padding:2px;font-size:9pt;">${item.text || item.item_text}</td>
+          <td style="border:1px solid #000;text-align:center;width:30px;font-size:10pt;">${check(item.checked && !item.deviation)}</td>
+          <td style="border:1px solid #000;text-align:center;width:30px;font-size:10pt;">${check(item.deviation)}</td>
+          <td style="border:1px solid #000;text-align:center;width:40px;font-size:10pt;">${check(item.corrected)}</td>
+          <td style="border:1px solid #000;text-align:center;width:50px;font-size:10pt;">${check(item.installer || item.requires_installer)}</td>
+        </tr>`;
+      });
+    }
+  });
+  
+  // Generer rader for side 2 (Generelt, Varmekabel, Våtrom, Utvendig)
+  const page2Cats = [5, 6, 7, 8];
+  let page2Rows = '';
+  page2Cats.forEach(catNum => {
+    const catItems = items.filter(i => i.catNum === catNum);
+    const catName = categories.find(c => c.num === catNum)?.name || '';
+    if (catItems.length > 0) {
+      page2Rows += `<tr style="background:#d9d9d9;"><td colspan="5" style="border:1px solid #000;padding:3px;font-weight:bold;">${catName}</td></tr>`;
+      catItems.forEach(item => {
+        page2Rows += `<tr>
+          <td style="border:1px solid #000;padding:2px;font-size:9pt;">${item.text || item.item_text}</td>
+          <td style="border:1px solid #000;text-align:center;width:30px;font-size:10pt;">${check(item.checked && !item.deviation)}</td>
+          <td style="border:1px solid #000;text-align:center;width:30px;font-size:10pt;">${check(item.deviation)}</td>
+          <td style="border:1px solid #000;text-align:center;width:40px;font-size:10pt;">${check(item.corrected)}</td>
+          <td style="border:1px solid #000;text-align:center;width:50px;font-size:10pt;">${check(item.installer || item.requires_installer)}</td>
+        </tr>`;
+      });
+    }
+  });
+  
+  // Generer avviksliste (15 rader)
+  let devRows = '';
+  for (let i = 1; i <= 15; i++) {
+    const d = devs[i-1];
+    const devText = d ? (d.text || d.item_text || '').substring(0, 60) + (d.comment ? ': ' + d.comment : '') : '';
+    devRows += `<tr>
+      <td style="border:1px solid #000;text-align:center;width:25px;padding:2px;">${i}</td>
+      <td style="border:1px solid #000;padding:2px;font-size:9pt;">${devText}</td>
+      <td style="border:1px solid #000;text-align:center;width:50px;font-size:10pt;">${d ? check(d.corrected) : '☐'}</td>
+    </tr>`;
+  }
+  
+  // Header-tabell som gjentas på alle sider
+  const headerTable = `
+    <table style="width:100%;border-collapse:collapse;margin-bottom:5px;">
+      <tr>
+        <td rowspan="2" style="border:1px solid #000;padding:5px;width:180px;vertical-align:middle;">
+          <div style="font-size:9pt;font-weight:bold;">Internkontroll Elektro</div>
+        </td>
+        <td style="border:1px solid #000;padding:3px;font-size:9pt;font-weight:bold;">KAP.5: Gjennomføring av kontroll</td>
+        <td style="border:1px solid #000;padding:3px;font-size:8pt;width:80px;">Utgitt dato<br>01.04.2011</td>
+        <td style="border:1px solid #000;padding:3px;font-size:8pt;width:70px;">Revisjon 2023</td>
+        <td style="border:1px solid #000;padding:3px;font-size:8pt;width:70px;">Godkjent av:</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #000;padding:3px;font-size:9pt;">Teknisk Forvaltning og Drift</td>
+        <td colspan="2" style="border:1px solid #000;padding:3px;font-size:8pt;">Adresse: ${fullAddr}</td>
+        <td style="border:1px solid #000;padding:3px;font-size:8pt;">Arbeidsordre: ${workOrder}</td>
+      </tr>
+    </table>`;
+  
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: A4; margin: 1cm 1.5cm; }
+body { font-family: Arial, sans-serif; font-size: 10pt; line-height: 1.2; }
+table { border-collapse: collapse; width: 100%; }
+.page-break { page-break-before: always; }
+h2 { font-size: 11pt; margin: 8px 0 5px 0; }
+.info-text { font-size: 8pt; color: #333; margin-bottom: 8px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- SIDE 1 -->
+${headerTable}
+
+<h2>KAP.5.4, SJEKKLISTE FOR INSTALLASJONSKONTROLL</h2>
+<p class="info-text">Sjekkliste må sjåast på som ei veiledning av kontrollen, og kan vanskelig bli komplett.<br>
+Det er særs viktig at ein brukar fagkunnskap og erfaring ved slik kontroll. Ein må tenkje på elsikkerhet, brann og berøringsfare.</p>
+
+<table>
+  <tr style="background:#d9d9d9;">
+    <th style="border:1px solid #000;padding:3px;text-align:left;">Kontrollobjekt</th>
+    <th style="border:1px solid #000;width:30px;padding:2px;font-size:8pt;">OK</th>
+    <th style="border:1px solid #000;width:30px;padding:2px;font-size:8pt;">Avvik</th>
+    <th style="border:1px solid #000;width:40px;padding:2px;font-size:8pt;">Utbedret</th>
+    <th style="border:1px solid #000;width:50px;padding:2px;font-size:7pt;">Krever inst.</th>
+  </tr>
+  ${page1Rows}
+</table>
+
+<!-- SIDE 2 -->
+<div class="page-break"></div>
+${headerTable}
+
+<table>
+  <tr style="background:#d9d9d9;">
+    <th style="border:1px solid #000;padding:3px;text-align:left;">Kontrollobjekt</th>
+    <th style="border:1px solid #000;width:30px;padding:2px;font-size:8pt;">OK</th>
+    <th style="border:1px solid #000;width:30px;padding:2px;font-size:8pt;">Avvik</th>
+    <th style="border:1px solid #000;width:40px;padding:2px;font-size:8pt;">Utbedret</th>
+    <th style="border:1px solid #000;width:50px;padding:2px;font-size:7pt;">Krever inst.</th>
+  </tr>
+  ${page2Rows}
+</table>
+
+<!-- KONTROLL UTFØRT AV -->
+<h2 style="margin-top:15px;">Kontroll utført av:</h2>
+<table>
+  <tr style="background:#d9d9d9;">
+    <th style="border:1px solid #000;padding:4px;width:150px;">Enhet/avdeling</th>
+    <th style="border:1px solid #000;padding:4px;width:150px;">Navn</th>
+    <th style="border:1px solid #000;padding:4px;width:80px;">Dato</th>
+    <th style="border:1px solid #000;padding:4px;">Videre behandling</th>
+  </tr>
+  <tr>
+    <td rowspan="4" style="border:1px solid #000;padding:4px;vertical-align:top;">${unit}</td>
+    <td rowspan="4" style="border:1px solid #000;padding:4px;vertical-align:top;">${inspector}</td>
+    <td rowspan="4" style="border:1px solid #000;padding:4px;vertical-align:top;">${inspDate}</td>
+    <td style="border:1px solid #000;padding:3px;font-size:9pt;">${check(form.errorsFixed)} Feil og mangler er rettet</td>
+  </tr>
+  <tr>
+    <td style="border:1px solid #000;padding:3px;font-size:9pt;">${check(form.maintenance)} Tiltak er notert i vedlikeholdsplan</td>
+  </tr>
+  <tr>
+    <td style="border:1px solid #000;padding:3px;font-size:9pt;">${check(form.sentInstaller)} Levert til EL-installatør</td>
+  </tr>
+  <tr>
+    <td style="border:1px solid #000;padding:3px;font-size:9pt;">☐ Kvittert for gjennomført kontroll</td>
+  </tr>
+</table>
+
+<!-- SIDE 3 -->
+<div class="page-break"></div>
+${headerTable}
+
+<!-- AVVIKSLISTE -->
+<table style="margin-top:10px;">
+  <tr style="background:#d9d9d9;">
+    <th style="border:1px solid #000;padding:3px;width:25px;">Nr.</th>
+    <th style="border:1px solid #000;padding:3px;">Avvik:</th>
+    <th style="border:1px solid #000;padding:3px;width:50px;">Utbedret:</th>
+  </tr>
+  ${devRows}
+</table>
+
+<!-- MÅLERESULTAT -->
+<h2 style="margin-top:15px;">Oppsummering måleresultat sluttkontroll</h2>
+<table>
+  <tr>
+    <td style="border:1px solid #000;padding:6px;width:25%;">Spenning: <strong>${form.voltage || '________'}</strong></td>
+    <td style="border:1px solid #000;padding:6px;width:25%;">Isolasjonsresistans: <strong>${form.insulation || '________'}</strong></td>
+    <td style="border:1px solid #000;padding:6px;width:25%;">Kontinuitet: <strong>${form.continuity || '________'}</strong></td>
+    <td style="border:1px solid #000;padding:6px;width:25%;">Test av jordfeilbryter: <strong>${form.rcd || '________'}</strong></td>
+  </tr>
+</table>
+
+${form.summary ? `<p style="margin-top:10px;font-size:9pt;"><strong>Tilleggskommentar:</strong> ${form.summary}</p>` : ''}
+
+</body>
+</html>`;
+}
+
+function downloadWord(insp) {
+  const html = generateWordHTML(insp);
+  const fullAddr = insp.full_address || insp.fullAddress || 'ukjent';
+  const inspDate = insp.inspection_date || insp.date || '';
+  const name = `Elkontroll_${inspDate}_${fullAddr.replace(/[^a-zA-Z0-9æøåÆØÅ\-]/g, '_')}`;
+  const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.doc';
+  a.click();
+}
+
+// ============================================
+// GPS
+// ============================================
+async function getGPS() {
+  if (!navigator.geolocation) {
+    showToast('GPS støttast ikkje', 'error');
+    return;
+  }
+  state.modal = 'gps';
+  render();
+  
+  navigator.geolocation.getCurrentPosition(
+    async (p) => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${p.coords.latitude}&lon=${p.coords.longitude}&format=json&addressdetails=1&accept-language=no`, {
+          headers: { 'User-Agent': 'Elkontroll-Alver' }
+        });
+        const d = await r.json();
+        state.form.address = `${d.address.road || ''} ${d.address.house_number || ''}`.trim();
+        state.modal = null;
+        showToast('📍 Adresse henta!');
+      } catch(e) {
+        state.modal = null;
+        showToast('Feil ved adressehenting', 'error');
+      }
+    },
+    () => { state.modal = null; showToast('GPS-feil', 'error'); },
+    { enableHighAccuracy: true, timeout: 15000 }
+  );
+}
+
+// ============================================
+// PHOTOS
+// ============================================
+function handlePhoto(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (state.photos.length >= 10) {
+    showToast('Maks 10 bilete', 'error');
+    return;
+  }
+  
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const max = 1000;
+      let w = img.width, h = img.height;
+      if (w > h && w > max) { h *= max / w; w = max; }
+      else if (h > max) { w *= max / h; h = max; }
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      state.photos.push({
+        id: genId(),
+        data: canvas.toDataURL('image/jpeg', 0.7),
+        type: state.photoType || 'Anna',
+        ts: new Date().toISOString()
+      });
+      state.modal = null;
+      render();
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ============================================
+// RENDER
+// ============================================
+function render() {
+  const app = document.getElementById('app');
+  
+  if (state.isLoading) {
+    app.innerHTML = `<div class="app"><div class="loading"><div class="spinner"></div><p>Lastar...</p></div></div>`;
+    return;
+  }
+  
+  app.innerHTML = `
+    <div class="app">
+      ${!state.isOnline ? '<div class="offline-banner">📵 Offline - data lagrast lokalt</div>' : ''}
+      ${state.isLoggedIn ? renderHeader() : ''}
+      ${state.toast ? `<div class="toast ${state.toast.type}">${state.toast.msg}</div>` : ''}
+      <div class="content">${renderView()}</div>
+      ${state.isLoggedIn && state.view !== 'login' ? renderNav() : ''}
+      ${renderModal()}
+    </div>
+  `;
+  attachEvents();
+}
+
+function renderHeader() {
+  const pendingCount = state.pendingSync.length;
+  return `
+    <header class="header">
+      <div class="header-row">
+        <div>
+          <h1><span class="logo">⚡</span> Elkontroll</h1>
+          ${state.view === 'control' ? `<div class="subtitle">${state.currentUser?.name} • ${getFullAddress() || 'Ny kontroll'}</div>` : ''}
+        </div>
+        <div class="sync-badge ${state.isSyncing ? 'syncing' : (state.isOnline ? 'online' : 'offline')}">
+          ${state.isSyncing ? '<span class="spinner"></span>' : (state.isOnline ? '🟢' : '🟡')}
+          ${pendingCount > 0 ? ` (${pendingCount})` : ''}
+        </div>
+      </div>
+    </header>
+  `;
+}
+
+function renderNav() {
+  return `
+    <nav class="nav">
+      <button class="${state.view === 'home' ? 'active' : ''}" data-view="home"><span class="icon">🏠</span>Heim</button>
+      <button class="${state.view === 'control' ? 'active' : ''}" data-view="control"><span class="icon">📋</span>Kontroll</button>
+      <button class="${state.view === 'search' ? 'active' : ''}" data-view="search"><span class="icon">🔍</span>Søk</button>
+      <button class="${state.view === 'settings' ? 'active' : ''}" data-view="settings"><span class="icon">⚙️</span>Innstillingar</button>
+    </nav>
+  `;
+}
+
+function renderView() {
+  switch(state.view) {
+    case 'login': return renderLogin();
+    case 'home': return renderHome();
+    case 'control': return renderControl();
+    case 'search': return renderSearch();
+    case 'detail': return renderDetail();
+    case 'settings': return renderSettings();
+    default: return renderHome();
+  }
+}
+
+function renderLogin() {
+  return `
+    <div class="login-container">
+      <div class="login-card">
+        <h2>⚡ Elkontroll</h2>
+        <p style="text-align:center;color:var(--text-muted);margin-bottom:20px;font-size:12px;">
+          Alver Kommune<br>Teknisk Forvaltning og Drift
+        </p>
+        <div class="users-grid">
+          ${state.users.map(u => `
+            <div class="user-card" data-user="${u.id}">
+              <div class="avatar">${u.name.charAt(0)}</div>
+              <div class="name">${u.name}</div>
+              <div class="role">${u.role === 'admin' ? '👑 Admin' : '👤 Brukar'}</div>
+            </div>
+          `).join('')}
+        </div>
+        <p style="text-align:center;color:#64748b;font-size:10px;margin-top:16px;">v${APP_VERSION}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderHome() {
+  const recent = state.inspections.slice(0, 5);
+  const totalDevs = state.inspections.reduce((sum, i) => sum + (i.deviation_count || 0), 0);
+  
+  return `
+    <div class="card">
+      <h3>👋 Hei, ${state.currentUser?.name}!</h3>
+      <button class="btn btn-primary" data-action="newControl">⚡ Start ny kontroll</button>
+      <button class="btn btn-secondary" data-action="externalControl">🔧 Registrer ekstern kontroll</button>
+    </div>
+    
+    ${state.pendingSync.length > 0 ? `
+      <div class="card" style="border-color:var(--warning);">
+        <h3 style="color:var(--warning);">⏳ Ventar på synk</h3>
+        <p style="color:var(--text-muted);font-size:12px;">${state.pendingSync.length} kontroll(ar) ikkje synkronisert</p>
+        ${state.isOnline ? '<button class="btn btn-small btn-secondary" data-action="syncNow">🔄 Synk no</button>' : ''}
+      </div>
+    ` : ''}
+    
+    <div class="card">
+      <h3>📊 Statistikk</h3>
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-value">${state.inspections.length}</div>
+          <div class="stat-label">Totalt</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value red">${state.inspections.filter(i => (i.deviation_count || 0) > 0).length}</div>
+          <div class="stat-label">Med avvik</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value green">${state.inspections.filter(i => i.progress === 100).length}</div>
+          <div class="stat-label">Fullført</div>
+        </div>
+      </div>
+    </div>
+    
+    ${recent.length > 0 ? `
+      <div class="card">
+        <h3>🕐 Siste kontrollar</h3>
+        ${recent.map(i => `
+          <div class="history-item" data-insp="${i.id}" style="padding:10px;background:var(--bg-dark);border-radius:8px;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;">
+              <strong style="font-size:13px;">${i.full_address || i.address}</strong>
+              <span style="color:#64748b;font-size:11px;">${i.inspection_date}</span>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:4px;">
+              ${(i.deviation_count || 0) > 0 ? 
+                `<span class="badge badge-red">${i.deviation_count} avvik</span>` : 
+                '<span class="badge badge-green">OK</span>'}
+              ${i.is_external ? '<span class="badge badge-orange">Ekstern</span>' : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    ` : '<div class="card"><p style="color:var(--text-muted);text-align:center;">Ingen kontrollar enno</p></div>'}
+  `;
+}
+
+function renderControl() {
+  const progress = getProgress();
+  const devs = getDeviations();
+  
+  return `
+    <div class="card">
+      <h3>📍 Adresse</h3>
+      <button class="btn btn-success" data-action="gps">📍 Hent frå GPS</button>
+      <label class="label">Gateadresse</label>
+      <input class="input" id="address" placeholder="Adresse..." value="${state.form.address}">
+      <label class="label">Eining / H-nr</label>
+      <div style="display:flex;gap:6px;">
+        <input class="input" id="suffix" style="flex:1;" placeholder="H0201, Leil. A..." value="${state.form.suffix}">
+        <button class="btn btn-secondary btn-small" data-action="unitModal">📋</button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><label class="label">Dato</label><input class="input" type="date" id="date" value="${state.form.date}"></div>
+        <div style="flex:1;"><label class="label">Arbeidsordre</label><input class="input" id="workOrder" placeholder="Valfritt" value="${state.form.workOrder}"></div>
+      </div>
+    </div>
+    
+    ${state.form.isExternal ? `
+      <div class="external-card">
+        <h3>🔧 Ekstern elektrikar</h3>
+        <label class="label">Firma</label>
+        <input class="input" id="externalFirma" placeholder="Firma..." value="${state.form.externalFirma}">
+        <label class="label">Kontaktperson</label>
+        <input class="input" id="externalContact" placeholder="Namn..." value="${state.form.externalContact}">
+      </div>
+    ` : ''}
+    
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;">
+        <span style="font-weight:600;">Framgang</span>
+        <span style="color:var(--primary);font-weight:700;">${progress}%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill ${progress === 100 ? 'complete' : ''}" style="width:${progress}%;"></div></div>
+      <div class="stats">
+        <div class="stat"><div class="stat-value">${state.items.filter(i => i.checked).length}</div><div class="stat-label">Sjekka</div></div>
+        <div class="stat"><div class="stat-value red">${devs.length}</div><div class="stat-label">Avvik</div></div>
+        <div class="stat"><div class="stat-value green">${state.items.filter(i => i.corrected).length}</div><div class="stat-label">Utbetra</div></div>
+      </div>
+    </div>
+    
+    ${categories.map(c => renderCategory(c)).join('')}
+    
+    ${devs.length > 0 ? `
+      <div class="deviation-card">
+        <h3>⚠️ Avvik (${devs.length})</h3>
+        ${devs.map((d, i) => `
+          <div class="deviation-item">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span><span class="check-num">${d.id}</span> Avvik ${i + 1}</span>
+              ${d.corrected ? '<span class="badge badge-green">✓ Utbetra</span>' : ''}
+              ${d.installer ? '<span class="badge badge-orange">Krev inst.</span>' : ''}
+            </div>
+            <p style="font-size:12px;margin-bottom:4px;">${d.text}</p>
+            ${d.comment ? `<p style="color:var(--text-muted);font-size:11px;">💬 ${d.comment}</p>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+    
+    <div class="card">
+      <h3>📷 Bilete (${state.photos.length}/10)</h3>
+      <div class="photos-grid">
+        ${state.photos.map(p => `
+          <div class="photo-item">
+            <img src="${p.data}">
+            <div class="photo-delete" data-photo="${p.id}">✕</div>
+          </div>
+        `).join('')}
+        ${state.photos.length < 10 ? '<div class="photo-add" data-action="photoModal"><span class="icon">📷</span>Legg til</div>' : ''}
+      </div>
+    </div>
+    
+    <div class="card">
+      <h3>📏 Målingar</h3>
+      <div class="measurements">
+        <div><label class="label">Spenning</label><input class="input" id="voltage" placeholder="230V" value="${state.form.voltage}"></div>
+        <div><label class="label">Isolasjon</label><input class="input" id="insulation" placeholder=">0,5MΩ" value="${state.form.insulation}"></div>
+        <div><label class="label">Kontinuitet</label><input class="input" id="continuity" placeholder="OK" value="${state.form.continuity}"></div>
+        <div><label class="label">Jordfeilbr.</label><input class="input" id="rcd" placeholder="OK" value="${state.form.rcd}"></div>
+      </div>
+    </div>
+    
+    <div class="card">
+      <h3>✅ Vidare behandling</h3>
+      <div class="action-check ${state.form.errorsFixed ? 'checked' : ''}" data-action="errorsFixed">
+        <input type="checkbox" ${state.form.errorsFixed ? 'checked' : ''}><span>Feil og manglar retta</span>
+      </div>
+      <div class="action-check ${state.form.maintenance ? 'checked' : ''}" data-action="maintenance">
+        <input type="checkbox" ${state.form.maintenance ? 'checked' : ''}><span>Notert i vedlikeholdsplan</span>
+      </div>
+      <div class="action-check ${state.form.sentInstaller ? 'checked' : ''}" data-action="sentInstaller">
+        <input type="checkbox" ${state.form.sentInstaller ? 'checked' : ''}><span>Sendt til installatør</span>
+      </div>
+      <label class="label" style="margin-top:10px;">Tilleggskommentar</label>
+      <textarea class="textarea" id="summary" placeholder="Oppsummering...">${state.form.summary}</textarea>
+    </div>
+    
+    <button class="btn btn-primary" data-action="saveModal">💾 Lagre kontroll</button>
+    <button class="btn btn-ghost" data-action="reset">🔄 Nullstill</button>
+  `;
+}
+
+function renderCategory(cat) {
+  const items = state.items.filter(i => i.catNum === cat.num);
+  const exp = state.expanded[cat.num];
+  const checked = items.filter(i => i.checked).length;
+  const devCount = items.filter(i => i.deviation).length;
+  
+  return `
+    <div class="category">
+      <div class="category-header ${exp ? 'expanded' : ''}" data-cat="${cat.num}">
+        <div style="display:flex;align-items:center;">
+          <span class="category-title">${cat.num}. ${cat.name}</span>
+          <span class="category-meta" style="margin-left:8px;">(${checked}/${items.length})</span>
+          ${devCount > 0 ? `<span class="category-badge">${devCount}</span>` : ''}
+        </div>
+        <span>${exp ? '▼' : '▶'}</span>
+      </div>
+      ${exp ? `<div class="category-items">${items.map(renderItem).join('')}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderItem(item) {
+  return `
+    <div class="check-item">
+      <div class="check-row">
+        <div class="check-box ${item.checked ? 'checked' : ''}" data-item="${item.id}"></div>
+        <div class="check-content">
+          <div class="check-text ${item.checked ? 'checked' : ''}">
+            <span class="check-num">${item.id}</span>${item.text}
+          </div>
+          <div class="check-options">
+            <div class="check-option ${item.deviation ? 'active' : ''}" data-dev="${item.id}">⚠️ Avvik</div>
+            ${item.deviation ? `
+              <div class="check-option ${item.corrected ? 'fixed' : ''}" data-fix="${item.id}">✓ Utbetra</div>
+              <div class="check-option ${item.installer ? 'installer' : ''}" data-inst="${item.id}">🔧 Krev inst.</div>
+            ` : ''}
+          </div>
+          <input class="comment-input" data-comment="${item.id}" placeholder="${item.deviation ? 'Beskriv avviket...' : 'Kommentar...'}" value="${item.comment || ''}">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSearch() {
+  const q = state.search.toLowerCase();
+  const results = q.length >= 2 ? 
+    state.inspections.filter(i => 
+      (i.full_address || '').toLowerCase().includes(q) || 
+      (i.inspection_date || '').includes(q)
+    ) : state.inspections;
+  
+  return `
+    <h2 style="font-size:16px;margin-bottom:12px;">🔍 Søk kontrollar</h2>
+    <input class="input" id="search" placeholder="Søk adresse, dato..." value="${state.search}">
+    
+    ${results.length === 0 ? `
+      <div class="card" style="text-align:center;color:#64748b;padding:40px;">
+        <div style="font-size:40px;margin-bottom:10px;">🔍</div>
+        <p>Ingen kontrollar funne</p>
+      </div>
+    ` : results.map(i => `
+      <div class="card history-item" data-insp="${i.id}">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+          <strong style="font-size:14px;">${i.full_address || i.address}</strong>
+          <span style="color:#64748b;font-size:11px;">${i.inspection_date}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+          ${i.is_external ? '<span class="badge badge-orange">Ekstern</span>' : ''}
+          ${(i.deviation_count || 0) > 0 ? 
+            `<span class="badge badge-red">${i.deviation_count} avvik</span>` : 
+            '<span class="badge badge-green">OK</span>'}
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderDetail() {
+  const i = state.viewInspection;
+  if (!i) return '';
+  
+  return `
+    <button class="btn btn-secondary btn-small" data-action="back" style="margin-bottom:12px;">← Tilbake</button>
+    
+    <div class="card">
+      <h2 style="font-size:16px;margin-bottom:8px;">${i.full_address || i.address}</h2>
+      <div style="color:var(--text-muted);font-size:12px;line-height:1.6;">
+        <div><strong>Dato:</strong> ${i.inspection_date}</div>
+        ${i.is_external ? `<div><strong>Ekstern:</strong> ${i.external_firma}</div>` : ''}
+        ${i.work_order ? `<div><strong>Arbeidsordre:</strong> ${i.work_order}</div>` : ''}
+      </div>
+    </div>
+    
+    <div class="stats" style="margin-bottom:10px;">
+      <div class="stat"><div class="stat-value">${i.checked_items || 0}</div><div class="stat-label">Sjekka</div></div>
+      <div class="stat"><div class="stat-value red">${i.deviation_count || 0}</div><div class="stat-label">Avvik</div></div>
+      <div class="stat"><div class="stat-value green">${i.corrected_count || 0}</div><div class="stat-label">Utbetra</div></div>
+    </div>
+    
+    <button class="btn btn-primary" data-action="viewReport">📄 Vis rapport</button>
+    <button class="btn btn-secondary" data-action="downloadReport">📥 Last ned Word</button>
+  `;
+}
+
+function renderSettings() {
+  const isAdmin = state.currentUser?.role === 'admin';
+  
+  return `
+    <h2 style="font-size:16px;margin-bottom:12px;">⚙️ Innstillingar</h2>
+    
+    <div class="card">
+      <h3>👤 Innlogga som</h3>
+      <p style="font-size:14px;">${state.currentUser?.name} 
+        <span class="badge ${isAdmin ? 'badge-orange' : 'badge-gray'}">${isAdmin ? 'Admin' : 'Brukar'}</span>
+      </p>
+      <button class="btn btn-secondary" data-action="logout" style="margin-top:10px;">🚪 Logg ut</button>
+    </div>
+    
+    <div class="card">
+      <h3>📊 Data</h3>
+      <p style="color:var(--text-muted);font-size:12px;">
+        Kontrollar i sky: ${state.inspections.length}<br>
+        Ventar på synk: ${state.pendingSync.length}
+      </p>
+      ${state.isOnline && state.pendingSync.length > 0 ? 
+        '<button class="btn btn-small btn-secondary" data-action="syncNow" style="margin-top:8px;">🔄 Synk no</button>' : ''}
+    </div>
+    
+    <div class="card">
+      <h3>ℹ️ Om</h3>
+      <p style="color:var(--text-muted);font-size:12px;">
+        Elkontroll v${APP_VERSION}<br>
+        Alver Kommune - Teknisk Forvaltning<br>
+        Database: Supabase ✅
+      </p>
+    </div>
+  `;
+}
+
+function renderModal() {
+  if (!state.modal) return '';
+  
+  if (state.modal === 'save') {
+    return `
+      <div class="modal">
+        <div class="modal-content">
+          <h3>💾 Lagre kontroll</h3>
+          <div style="background:var(--bg-dark);border-radius:10px;padding:12px;margin-bottom:14px;">
+            <div style="color:var(--text-muted);font-size:11px;">Adresse:</div>
+            <div style="color:#fff;font-weight:600;">${getFullAddress() || 'Ikkje angitt'}</div>
+          </div>
+          <button class="btn btn-primary" data-action="saveOnly">💾 Lagre</button>
+          <button class="btn btn-secondary" data-action="saveDownload">💾 Lagre + Last ned Word</button>
+          <button class="btn btn-ghost" data-action="closeModal">Avbryt</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  if (state.modal === 'unit') {
+    return `
+      <div class="modal">
+        <div class="modal-content">
+          <h3>🏢 Vel eining</h3>
+          <div class="chips">
+            ${unitSuffixes.map(u => `<div class="chip ${state.form.suffix === u ? 'active' : ''}" data-suffix="${u}">${u}</div>`).join('')}
+          </div>
+          <button class="btn btn-primary" data-action="closeModal">✓ OK</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  if (state.modal === 'photo') {
+    return `
+      <div class="modal">
+        <div class="modal-content">
+          <h3>📷 Legg til bilete</h3>
+          <label class="label">Type bilete</label>
+          <div class="chips">
+            ${photoTypes.map(t => `<div class="chip ${state.photoType === t ? 'active' : ''}" data-phototype="${t}">${t}</div>`).join('')}
+          </div>
+          <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none;">
+          <button class="btn btn-primary" data-action="takePhoto">📷 Ta bilete</button>
+          <button class="btn btn-ghost" data-action="closeModal">Avbryt</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  if (state.modal === 'gps') {
+    return `
+      <div class="modal">
+        <div class="modal-content" style="text-align:center;">
+          <div class="spinner" style="margin:20px auto;"></div>
+          <p>Hentar posisjon...</p>
+        </div>
+      </div>
+    `;
+  }
+  
+  if (state.modal === 'report') {
+    return `
+      <div class="modal">
+        <div class="modal-content" style="max-width:95%;">
+          <h3>📄 Rapport</h3>
+          <div class="report-view">
+            ${generateWordHTML(state.viewInspection).replace(/<\/?html>|<\/?head>|<\/?body>|<style[^>]*>.*?<\/style>|<meta[^>]*>/gs, '')}
+          </div>
+          <button class="btn btn-primary" data-action="closeModal" style="margin-top:10px;">Lukk</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  return '';
+}
+
+// ============================================
+// EVENT LISTENERS
+// ============================================
+function attachEvents() {
+  // Navigation
+  document.querySelectorAll('[data-view]').forEach(el => {
+    el.onclick = () => {
+      state.view = el.dataset.view;
+      if (state.view === 'search') state.viewInspection = null;
+      render();
+    };
+  });
+  
+  // User selection
+  document.querySelectorAll('[data-user]').forEach(el => {
+    el.onclick = () => {
+      state.currentUser = state.users.find(u => u.id === el.dataset.user);
+      state.isLoggedIn = true;
+      saveLocal('currentUser', state.currentUser);
+      state.view = 'home';
+      render();
+    };
+  });
+  
+  // Actions
+  document.querySelectorAll('[data-action]').forEach(el => {
+    el.onclick = async () => {
+      const a = el.dataset.action;
+      switch(a) {
+        case 'newControl': resetForm(); state.form.isExternal = false; state.view = 'control'; break;
+        case 'externalControl': resetForm(); state.form.isExternal = true; state.view = 'control'; break;
+        case 'gps': getGPS(); return;
+        case 'unitModal': state.modal = 'unit'; break;
+        case 'photoModal': state.photoType = 'Anna'; state.modal = 'photo'; break;
+        case 'saveModal': state.modal = 'save'; break;
+        case 'saveOnly': await saveInspection(false); return;
+        case 'saveDownload': await saveInspection(true); return;
+        case 'closeModal': state.modal = null; break;
+        case 'reset': if (confirm('Nullstille?')) resetForm(); break;
+        case 'back': state.view = 'search'; state.viewInspection = null; break;
+        case 'logout': 
+          state.isLoggedIn = false; 
+          state.currentUser = null; 
+          saveLocal('currentUser', null); 
+          state.view = 'login'; 
+          break;
+        case 'syncNow': syncPendingData(); return;
+        case 'takePhoto': document.getElementById('photoInput')?.click(); return;
+        case 'viewReport': state.modal = 'report'; break;
+        case 'downloadReport': downloadWord(state.viewInspection); return;
+        case 'errorsFixed': state.form.errorsFixed = !state.form.errorsFixed; break;
+        case 'maintenance': state.form.maintenance = !state.form.maintenance; break;
+        case 'sentInstaller': state.form.sentInstaller = !state.form.sentInstaller; break;
+      }
+      render();
+    };
+  });
+  
+  // Categories
+  document.querySelectorAll('[data-cat]').forEach(el => {
+    el.onclick = () => {
+      const n = parseInt(el.dataset.cat);
+      state.expanded[n] = !state.expanded[n];
+      render();
+    };
+  });
+  
+  // Check items
+  document.querySelectorAll('[data-item]').forEach(el => {
+    el.onclick = () => {
+      const item = state.items.find(i => i.id === el.dataset.item);
+      if (item) { item.checked = !item.checked; render(); }
+    };
+  });
+  
+  // Deviations
+  document.querySelectorAll('[data-dev]').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const item = state.items.find(i => i.id === el.dataset.dev);
+      if (item) {
+        item.deviation = !item.deviation;
+        if (!item.deviation) { item.corrected = false; item.installer = false; }
+        render();
+      }
+    };
+  });
+  
+  document.querySelectorAll('[data-fix]').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const item = state.items.find(i => i.id === el.dataset.fix);
+      if (item) { item.corrected = !item.corrected; render(); }
+    };
+  });
+  
+  document.querySelectorAll('[data-inst]').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const item = state.items.find(i => i.id === el.dataset.inst);
+      if (item) { item.installer = !item.installer; render(); }
+    };
+  });
+  
+  // Comments
+  document.querySelectorAll('[data-comment]').forEach(el => {
+    el.oninput = () => {
+      const item = state.items.find(i => i.id === el.dataset.comment);
+      if (item) item.comment = el.value;
+    };
+  });
+  
+  // Unit selection
+  document.querySelectorAll('[data-suffix]').forEach(el => {
+    el.onclick = () => { state.form.suffix = el.dataset.suffix; render(); };
+  });
+  
+  // Photo type
+  document.querySelectorAll('[data-phototype]').forEach(el => {
+    el.onclick = () => { state.photoType = el.dataset.phototype; render(); };
+  });
+  
+  // Delete photo
+  document.querySelectorAll('[data-photo]').forEach(el => {
+    el.onclick = () => {
+      state.photos = state.photos.filter(p => p.id !== el.dataset.photo);
+      render();
+    };
+  });
+  
+  // Inspection detail
+  document.querySelectorAll('[data-insp]').forEach(el => {
+    el.onclick = async () => {
+      const insp = state.inspections.find(i => i.id === el.dataset.insp);
+      if (insp) {
+        // Hent items for denne kontrollen
+        try {
+          const { data: items } = await supabase
+            .from('inspection_items')
+            .select('*')
+            .eq('inspection_id', insp.id);
+          insp.items = items || [];
+        } catch(e) {
+          console.error('Kunne ikkje hente items:', e);
+        }
+        state.viewInspection = insp;
+        state.view = 'detail';
+        render();
+      }
+    };
+  });
+  
+  // Photo input
+  const photoInput = document.getElementById('photoInput');
+  if (photoInput) photoInput.onchange = handlePhoto;
+  
+  // Form inputs
+  ['address', 'suffix', 'date', 'workOrder', 'voltage', 'insulation', 'continuity', 'rcd', 'summary', 'externalFirma', 'externalContact', 'search'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.oninput = () => {
+        if (id === 'search') {
+          state.search = el.value;
+          render();
+        } else {
+          state.form[id] = el.value;
+        }
+      };
+    }
+  });
+}
+
+// ============================================
+// START APP
+// ============================================
+init();
