@@ -1,0 +1,12 @@
+{
+  "name": "elkontroll-alver",
+  "version": "3.0.0",
+  "description": "Internkontroll elektro - Alver Kommune",
+  "scripts": {
+    "dev": "npx serve public",
+    "start": "npx serve public"
+  },
+  "author": "Teknisk Forvaltning og Drift",
+  "license": "UNLICENSED",
+  "private": true
+}
