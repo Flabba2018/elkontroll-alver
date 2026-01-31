@@ -30,9 +30,7 @@ Internkontroll-app for elektriske installasjonar i kommunale leilegheiter.
 
 ## Brukarar
 
-- Cato (admin)
-- Kristian
-- Bjørn Inge
+Brukarlista blir henta frå Supabase-tabellen `users` (eller frå lokal fallback ved offline).
 
 ## Database
 
@@ -40,3 +38,8 @@ Supabase-prosjekt: Elkontroll
 Tabellar: users, apartments, inspections, inspection_items, inspection_photos, deviations
 
 > Merk: `config.js` bruker Supabase anon-nøkkel i klienten. Sørg for at RLS er aktivert på alle tabellar.
+
+## Personvern og lokal lagring
+
+Appen lagrar inspeksjonar, bilete og brukardata lokalt i nettlesaren for offline-støtte.
+Sørg for at einingar er låst og at data blir rydda ved behov.
