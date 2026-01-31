@@ -65,6 +65,148 @@ function getSupabaseClient() {
   return null;
 }
 
+
+// ============================================
+// AUTH / SECURITY HELPERS
+// ============================================
+function isAuthenticated() {
+  return !!(state.auth && state.auth.session && state.auth.session.user && state.auth.session.user.id);
+}
+
+function getAuthUserId() {
+  return isAuthenticated() ? state.auth.session.user.id : null;
+}
+
+function formatSupabaseError(err) {
+  if (!err) return 'Ukjend feil';
+  // SupabaseError typisk: { message, details, hint, code }
+  const parts = [];
+  const msg = err.message || err.error_description || err.toString();
+  if (msg) parts.push(msg);
+  if (err.code) parts.push(`code=${err.code}`);
+  if (err.details) parts.push(String(err.details));
+  if (err.hint) parts.push(String(err.hint));
+  return parts.filter(Boolean).join(' • ');
+}
+
+async function initAuth() {
+  const client = getSupabaseClient();
+  if (!client || !client.auth) return;
+
+  try {
+    const { data, error } = await client.auth.getSession();
+    if (error) console.warn('⚠️ auth.getSession:', error);
+    state.auth.session = data?.session || null;
+  } catch (e) {
+    console.warn('⚠️ auth.getSession exception:', e);
+    state.auth.session = null;
+  }
+
+  // Lytt på endringar (login/logout/refresh)
+  try {
+    client.auth.onAuthStateChange((_event, session) => {
+      state.auth.session = session || null;
+      // Ved logout: tilbake til login
+      if (!session) {
+        state.isLoggedIn = false;
+        state.currentUser = null;
+        state.view = 'login';
+        render();
+      }
+    });
+  } catch (e) {
+    console.warn('⚠️ auth.onAuthStateChange feila:', e);
+  }
+}
+
+async function fetchMyProfile() {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  const uid = getAuthUserId();
+  if (!uid) return null;
+
+  try {
+    const { data, error } = await withTimeout(
+      client.from('users').select('*').eq('id', uid).single(),
+      8000,
+      'fetchMyProfile'
+    );
+    if (error) throw error;
+    state.auth.profile = data || null;
+    return state.auth.profile;
+  } catch (e) {
+    console.warn('⚠️ Kunne ikkje hente profil (users):', e);
+    state.auth.profile = null;
+    return null;
+  }
+}
+
+async function signInWithEmailPassword(email, password) {
+  const client = getSupabaseClient();
+  if (!client || !client.auth) throw new Error('Supabase auth ikkje tilgjengeleg');
+  state.auth.isBusy = true;
+  state.auth.error = null;
+  render();
+
+  try {
+    const { data, error } = await withTimeout(
+      client.auth.signInWithPassword({ email, password }),
+      12000,
+      'auth.signInWithPassword'
+    );
+    if (error) throw error;
+
+    state.auth.session = data?.session || null;
+
+    // Hydrer currentUser frå profil (rolle) om mogleg
+    await fetchMyProfile();
+    const profile = state.auth.profile;
+
+    state.currentUser = {
+      id: data.user.id,
+      name: profile?.name || data.user.email || 'Brukar',
+      role: profile?.role || 'user'
+    };
+    state.isLoggedIn = true;
+    state.view = 'home';
+
+    // Etter login: hent data + prøv sync
+    await fetchInspections();
+    if (state.currentUser?.role === 'admin') await fetchUsers();
+    if (state.isOnline) syncPendingData(true).catch(() => {});
+  } catch (e) {
+    state.auth.error = formatSupabaseError(e);
+    throw e;
+  } finally {
+    state.auth.isBusy = false;
+    render();
+  }
+}
+
+async function signOut() {
+  const client = getSupabaseClient();
+  if (!client || !client.auth) return;
+  await client.auth.signOut();
+  state.auth.session = null;
+  state.auth.profile = null;
+  state.isLoggedIn = false;
+  state.currentUser = null;
+  state.view = 'login';
+  render();
+}
+
+async function sendPasswordReset(email) {
+  const client = getSupabaseClient();
+  if (!client || !client.auth) throw new Error('Supabase auth ikkje tilgjengeleg');
+  const redirectTo = window.location.origin + window.location.pathname; // GitHub Pages friendly
+  const { error } = await withTimeout(
+    client.auth.resetPasswordForEmail(email, { redirectTo }),
+    12000,
+    'auth.resetPasswordForEmail'
+  );
+  if (error) throw error;
+}
+
 function renderFatalError(err) {
   const app = document.getElementById('app');
   if (!app) return;
@@ -173,6 +315,14 @@ const unitSuffixes = ['H0101','H0102','H0103','H0201','H0202','H0203','H0301','H
 // ============================================
 let state = {
   isLoggedIn: false,
+  auth: {
+    session: null,
+    profile: null,
+    email: '',
+    password: '',
+    isBusy: false,
+    error: null
+  },
   currentUser: null,
   users: [],
   view: 'login',
@@ -272,6 +422,7 @@ async function fetchUsers() {
     const client = getSupabaseClient();
     if (!state.isOnline) throw new Error('Offline');
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan lagre til databasen');
     const query = client
       .from('users')
       .select('*')
@@ -298,6 +449,7 @@ async function fetchInspections() {
     const client = getSupabaseClient();
     if (!state.isOnline) throw new Error('Offline');
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     const query = client
       .from('inspections')
       .select('*')
@@ -319,6 +471,7 @@ async function saveInspectionToSupabase(inspection) {
   try {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     // 1. Lagre hovud-inspeksjon
     const { data: inspData, error: inspError } = await withTimeout(
       client
@@ -327,8 +480,7 @@ async function saveInspectionToSupabase(inspection) {
         address: inspection.address,
         suffix: inspection.suffix,
         full_address: inspection.fullAddress,
-        user_id: (inspection.userId && inspection.userId.includes('-')) ? inspection.userId : 
-                 (state.currentUser?.id && state.currentUser.id.includes('-')) ? state.currentUser.id : null,
+        user_id: getAuthUserId(),
         inspection_date: inspection.date,
         work_order: inspection.workOrder || null,
         is_external: inspection.form.isExternal,
@@ -431,6 +583,7 @@ async function saveInspectionToSupabase(inspection) {
 
 async function syncPendingData(force = false) {
   if (!state.isOnline) return;
+  if (!isAuthenticated()) return;
   await ensureSupabaseReady();
   const client = getSupabaseClient();
   if (!client) {
@@ -504,6 +657,7 @@ async function deleteAllInspections() {
   try {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     
     // Slett i riktig rekkefølge (foreign keys)
     showToast('🗑️ Slettar kontrollar...', 'warning');
@@ -527,6 +681,7 @@ async function deleteInspection(inspectionId) {
   try {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     
     // Slett relaterte data først
     await client.from('deviations').delete().eq('inspection_id', inspectionId);
@@ -552,6 +707,7 @@ async function updateUserRole(userId, newRole) {
   try {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     
     const { error } = await client
       .from('users')
@@ -577,6 +733,7 @@ async function addNewUser(name, role = 'user') {
   try {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     
     const { data, error } = await client
       .from('users')
@@ -677,6 +834,7 @@ async function updateInspectionInSupabase(inspectionId, inspection) {
   try {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase ikkje aktiv');
+    if (!isAuthenticated()) throw new Error('Du må logge inn før du kan bruke Supabase');
     
     // Oppdater hovud-inspeksjon
     const { error: inspError } = await client
@@ -761,28 +919,48 @@ async function init() {
     loadLocalInspections();
     render(); // vis spinner med ein gong
 
-    // Sjekk innlogging
-    const savedUser = loadLocal('currentUser', null);
-
-    // Hent data (med timeout og offline-fallback)
     await ensureSupabaseReady();
-    await fetchUsers();
-    await fetchInspections();
+    await initAuth();
 
-    if (savedUser && state.users.find(u => u.id === savedUser.id)) {
-      state.currentUser = savedUser;
+    // Dersom vi har aktiv session: bruk Supabase som fasit
+    if (isAuthenticated()) {
+      await fetchMyProfile();
+      const profile = state.auth.profile;
+
+      state.currentUser = {
+        id: getAuthUserId(),
+        name: profile?.name || state.auth.session.user.email || 'Brukar',
+        role: profile?.role || 'user'
+      };
       state.isLoggedIn = true;
       state.view = 'home';
+
+      // Admin kan sjå/endre rolle-liste
+      if (state.currentUser.role === 'admin') {
+        await fetchUsers();
+      } else {
+        // For ikkje-admin: ikkje hent brukar-liste
+        state.users = [];
+      }
+
+      await fetchInspections();
+
+      // Synk pending data (dersom online)
+      if (state.isOnline) {
+        syncPendingData().catch(() => {});
+      }
+    } else {
+      // Ikkje innlogga: vis login, bruk lokal cache
+      state.isLoggedIn = false;
+      state.currentUser = null;
+      state.users = [];
+      state.view = 'login';
+      state.inspections = loadLocal('inspections', []);
     }
 
     resetForm();
     state.isLoading = false;
     render();
-
-    // Synk pending data
-    if (state.isOnline) {
-      syncPendingData();
-    }
   } catch (e) {
     console.error('❌ Init-feil:', e);
     state.isLoading = false;
@@ -857,8 +1035,8 @@ async function saveInspection(download = false) {
     address: state.form.address,
     suffix: state.form.suffix,
     date: state.form.date,
-    user: state.currentUser.name,
-    userId: state.currentUser.id,
+    user: state.currentUser?.name || state.auth.session?.user?.email || 'Ukjend',
+    userId: state.currentUser?.id || getAuthUserId(),
     workOrder: state.form.workOrder,
     items: JSON.parse(JSON.stringify(state.items)),
     photos: [...state.photos],
@@ -1265,6 +1443,8 @@ function renderView() {
 }
 
 function renderLogin() {
+  const err = state.auth?.error ? `<div style="margin-top:10px;color:var(--danger);font-size:12px;">❌ ${escapeHTML(state.auth.error)}</div>` : '';
+  const disabled = state.auth?.isBusy ? 'disabled' : '';
   return `
     <div class="login-container">
       <div class="login-card">
@@ -1272,16 +1452,30 @@ function renderLogin() {
         <p style="text-align:center;color:var(--text-muted);margin-bottom:20px;font-size:12px;">
           Alver Kommune<br>Teknisk Forvaltning og Drift
         </p>
-        <div class="users-grid">
-          ${state.users.map(u => `
-            <div class="user-card" data-user="${escapeHTML(u.id)}">
-              <div class="avatar">${escapeHTML(u.name.charAt(0))}</div>
-              <div class="name">${escapeHTML(u.name)}</div>
-              <div class="role">${u.role === 'admin' ? '👑 Admin' : '👤 Brukar'}</div>
-            </div>
-          `).join('')}
+
+        <label class="label">E-post</label>
+        <input class="input" id="loginEmail" placeholder="namn@alver.kommune.no" value="${escapeHTML(state.auth?.email || '')}" autocomplete="username">
+
+        <label class="label">Passord</label>
+        <input class="input" id="loginPassword" type="password" placeholder="••••••••" value="${escapeHTML(state.auth?.password || '')}" autocomplete="current-password">
+
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;">
+          <button class="btn btn-primary" data-action="doLogin" ${disabled}>🔐 Logg inn</button>
+          <button class="btn btn-secondary" data-action="doResetPassword" ${disabled}>📩 Send passord-reset</button>
         </div>
-        <p style="text-align:center;color:#64748b;font-size:10px;margin-top:16px;">v${APP_VERSION_SAFE}</p>
+
+        ${state.auth?.isBusy ? '<p style="text-align:center;color:var(--text-muted);font-size:11px;margin-top:12px;">Jobbar…</p>' : ''}
+        ${err}
+
+        <p style="text-align:center;color:#64748b;font-size:10px;margin-top:16px;">
+          v${APP_VERSION_SAFE}
+        </p>
+
+        <p style="text-align:center;color:var(--text-muted);font-size:10px;margin-top:8px;line-height:1.4;">
+          Merk: For at lagring til database skal fungere sikkert må du vere innlogga.
+
+          Offline kan du framleis fylle ut og lagre lokalt – synk skjer når du loggar inn.
+        </p>
       </div>
     </div>
   `;
@@ -1839,23 +2033,44 @@ function attachEvents() {
       render();
     };
   });
-  
-  // User selection
-  document.querySelectorAll('[data-user]').forEach(el => {
-    el.onclick = () => {
-      state.currentUser = state.users.find(u => u.id === el.dataset.user);
-      state.isLoggedIn = true;
-      saveLocal('currentUser', state.currentUser);
-      state.view = 'home';
-      render();
-    };
-  });
-  
+
   // Actions (ekskluder select-element som har eigen handler)
   document.querySelectorAll('[data-action]:not(select)').forEach(el => {
     el.onclick = async () => {
       const a = el.dataset.action;
       switch(a) {
+        case 'doLogin': {
+          const email = (document.getElementById('loginEmail')?.value || '').trim();
+          const password = document.getElementById('loginPassword')?.value || '';
+          state.auth.email = email;
+          state.auth.password = password;
+          if (!email || !password) {
+            showToast('⚠️ Skriv inn e-post og passord', 'warning');
+            return;
+          }
+          try {
+            await signInWithEmailPassword(email, password);
+            showToast('✅ Innlogga', 'success');
+          } catch (e) {
+            showToast('❌ Innlogging feila: ' + formatSupabaseError(e), 'warning');
+          }
+          return;
+        }
+        case 'doResetPassword': {
+          const email = (document.getElementById('loginEmail')?.value || '').trim();
+          state.auth.email = email;
+          if (!email) {
+            showToast('⚠️ Skriv inn e-post først', 'warning');
+            return;
+          }
+          try {
+            await sendPasswordReset(email);
+            showToast('📩 Reset sendt. Sjekk e-post.', 'success');
+          } catch (e) {
+            showToast('❌ Reset feila: ' + formatSupabaseError(e), 'warning');
+          }
+          return;
+        }
         case 'newControl': resetForm(); state.form.isExternal = false; state.view = 'control'; break;
         case 'externalControl': resetForm(); state.form.isExternal = true; state.view = 'control'; break;
         case 'gps': getGPS(); return;
@@ -1902,12 +2117,9 @@ function attachEvents() {
         case 'closeModal': state.modal = null; break;
         case 'reset': if (confirm('Nullstille?')) resetForm(); break;
         case 'back': state.view = 'search'; state.viewInspection = null; break;
-        case 'logout': 
-          state.isLoggedIn = false; 
-          state.currentUser = null; 
-          saveLocal('currentUser', null); 
-          state.view = 'login'; 
-          break;
+        case 'logout':
+          await signOut();
+          return;
         case 'syncNow': syncPendingData(); return;
         case 'takePhoto': document.getElementById('photoInput')?.click(); return;
         case 'viewReport': state.modal = 'report'; break;
