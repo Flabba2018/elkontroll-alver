@@ -1,4 +1,4 @@
-# elkontroll-alver[README.md](https://github.com/user-attachments/files/24975000/README.md)
+
 # Elkontroll - Alver Kommune
 
 Internkontroll-app for elektriske installasjonar i kommunale leilegheiter.
