@@ -16,10 +16,24 @@ function withTimeout(promise, ms, label = 'request') {
   ]);
 }
 
+function escapeHTML(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeClassName(value, fallback = '') {
+  const cleaned = String(value || '').replace(/[^a-z0-9_-]/gi, '');
+  return cleaned || fallback;
+}
+
 function renderFatalError(err) {
   const app = document.getElementById('app');
   if (!app) return;
-  const msg = (err && (err.stack || err.message)) ? (err.stack || err.message) : String(err);
+  const msg = escapeHTML((err && (err.stack || err.message)) ? (err.stack || err.message) : String(err));
   app.innerHTML = `
     <div class="app">
       <div class="content">
@@ -862,7 +876,7 @@ function render() {
     <div class="app">
       ${!state.isOnline ? '<div class="offline-banner">📵 Offline - data lagrast lokalt</div>' : ''}
       ${state.isLoggedIn ? renderHeader() : ''}
-      ${state.toast ? `<div class="toast ${state.toast.type}">${state.toast.msg}</div>` : ''}
+      ${state.toast ? `<div class="toast ${safeClassName(state.toast.type)}">${escapeHTML(state.toast.msg)}</div>` : ''}
       <div class="content">${renderView()}</div>
       ${state.isLoggedIn && state.view !== 'login' ? renderNav() : ''}
       ${renderModal()}
@@ -878,7 +892,7 @@ function renderHeader() {
       <div class="header-row">
         <div>
           <h1><span class="logo">⚡</span> Elkontroll</h1>
-          ${state.view === 'control' ? `<div class="subtitle">${state.currentUser?.name} • ${getFullAddress() || 'Ny kontroll'}</div>` : ''}
+          ${state.view === 'control' ? `<div class="subtitle">${escapeHTML(state.currentUser?.name || '')} • ${escapeHTML(getFullAddress() || 'Ny kontroll')}</div>` : ''}
         </div>
         <div class="sync-badge ${state.isSyncing ? 'syncing' : (state.isOnline ? 'online' : 'offline')}">
           ${state.isSyncing ? '<span class="spinner"></span>' : (state.isOnline ? '🟢' : '🟡')}
@@ -922,9 +936,9 @@ function renderLogin() {
         </p>
         <div class="users-grid">
           ${state.users.map(u => `
-            <div class="user-card" data-user="${u.id}">
-              <div class="avatar">${u.name.charAt(0)}</div>
-              <div class="name">${u.name}</div>
+            <div class="user-card" data-user="${escapeHTML(u.id)}">
+              <div class="avatar">${escapeHTML(u.name.charAt(0))}</div>
+              <div class="name">${escapeHTML(u.name)}</div>
               <div class="role">${u.role === 'admin' ? '👑 Admin' : '👤 Brukar'}</div>
             </div>
           `).join('')}
@@ -941,7 +955,7 @@ function renderHome() {
   
   return `
     <div class="card">
-      <h3>👋 Hei, ${state.currentUser?.name}!</h3>
+      <h3>👋 Hei, ${escapeHTML(state.currentUser?.name || '')}!</h3>
       <button class="btn btn-primary" data-action="newControl">⚡ Start ny kontroll</button>
       <button class="btn btn-secondary" data-action="externalControl">🔧 Registrer ekstern kontroll</button>
     </div>
@@ -955,12 +969,12 @@ function renderHome() {
           ${state.pendingSync.slice(0, 5).map(p => `
             <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--bg-dark);border:1px solid var(--border);border-radius:10px;padding:10px;">
               <div style="min-width:0;">
-                <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.fullAddress || p.address || 'Ukjend adresse'}</div>
-                <div style="color:var(--text-muted);font-size:11px;">${p.date || ''}</div>
+                <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHTML(p.fullAddress || p.address || 'Ukjend adresse')}</div>
+                <div style="color:var(--text-muted);font-size:11px;">${escapeHTML(p.date || '')}</div>
               </div>
               <div style="display:flex;gap:6px;flex-shrink:0;">
-                <button class="btn btn-small btn-secondary" data-action="viewPending" data-localid="${p.localId}">👁️</button>
-                <button class="btn btn-small btn-secondary" data-action="downloadPending" data-localid="${p.localId}">📄</button>
+                <button class="btn btn-small btn-secondary" data-action="viewPending" data-localid="${escapeHTML(p.localId)}">👁️</button>
+                <button class="btn btn-small btn-secondary" data-action="downloadPending" data-localid="${escapeHTML(p.localId)}">📄</button>
               </div>
             </div>
           `).join('')}
