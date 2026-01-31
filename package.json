@@ -1,6 +1,6 @@
 {
   "name": "elkontroll-alver",
-  "version": "3.2.0",
+  "version": "3.0.0",
   "description": "Internkontroll elektro - Alver Kommune",
   "scripts": {
     "dev": "npx serve docs",
