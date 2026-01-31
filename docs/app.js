@@ -30,6 +30,19 @@ function safeClassName(value, fallback = '') {
   return cleaned || fallback;
 }
 
+function ensureSupabaseReady() {
+  if (window.supabase && typeof window.supabase.createClient === 'function') {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+    script.onload = () => resolve(!!window.supabase);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+}
+
 function getSupabaseClient() {
   if (supabase && typeof supabase.from === 'function') return supabase;
   if (window.supabaseClient && typeof window.supabaseClient.from === 'function') {
@@ -401,6 +414,7 @@ async function saveInspectionToSupabase(inspection) {
 
 async function syncPendingData(force = false) {
   if (!state.isOnline) return;
+  await ensureSupabaseReady();
   const client = getSupabaseClient();
   if (!client) {
     state.lastSyncError = 'Supabase ikkje aktiv (manglar config/CDN?)';
@@ -480,6 +494,7 @@ async function init() {
     const savedUser = loadLocal('currentUser', null);
 
     // Hent data (med timeout og offline-fallback)
+    await ensureSupabaseReady();
     await fetchUsers();
     await fetchInspections();
 
