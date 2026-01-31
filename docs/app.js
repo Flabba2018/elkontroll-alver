@@ -5,6 +5,9 @@
 
 const STORAGE_KEY = 'elkontroll_';
 
+// Lokal referanse til Supabase-klient (henta frå window.supabaseClient)
+let supabase = null;
+
 // Fallback dersom config.js ikkje lastar (GitHub Pages / caching / path)
 const APP_VERSION_SAFE = (typeof APP_VERSION === 'string' && APP_VERSION.trim()) ? APP_VERSION : 'dev';
 
