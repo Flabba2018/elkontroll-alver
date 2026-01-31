@@ -1,7 +1,7 @@
 const SUPABASE_URL = 'https://rkznfraztzrkzednukoc.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'; // Din anon key
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'; // Bruk din eksisterande anon key
 
-const APP_VERSION = '4.0.0-PRO';
+const APP_VERSION = '4.1.0-ALVER-PRO';
 
 let supabaseClient = null;
 try {
@@ -12,6 +12,7 @@ try {
         autoRefreshToken: true
       }
     });
+    console.log('✅ Supabase konfigurert');
   }
 } catch (e) {
   console.warn('⚠️ Supabase init feila:', e);
