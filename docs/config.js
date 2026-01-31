@@ -8,8 +8,7 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 // App versjon
 const APP_VERSION = '3.1.0';
 
-// Initialiser Supabase klient (defensivt – ikkje krasj appen om CDN/JS feilar)
-// NB: Bruk supabaseClient for å unngå konflikt med window.supabase frå CDN
+// Initialiser Supabase klient
 let supabaseClient = null;
 try {
   if (window.supabase && typeof window.supabase.createClient === 'function') {
