@@ -29,6 +29,27 @@ function escapeHTML(value) {
     .replace(/'/g, '&#39;');
 }
 
+// Render QR frå Supabase MFA enrollment.
+// Supabase kan returnere anten SVG-markup ("<svg ...>") eller ein data-URL.
+// SVG i src-attributt kan gi "rusket" du ser i UI dersom strengen inneheld 
+// u-enkoda teikn som " (quote). Derfor handterer vi SVG som inline markup.
+function renderMfaQr(qr) {
+  const s = String(qr || '').trim();
+  if (!s) return '';
+
+  // Inline SVG
+  if (s.startsWith('<svg') || s.includes('<svg')) {
+    return `
+      <div style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+        ${s}
+      </div>
+    `;
+  }
+
+  // Data URL / bilde URL
+  return `<img src="${escapeHTML(s)}" alt="MFA QR" style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;"/>`;
+}
+
 function safeClassName(value, fallback = '') {
   const cleaned = String(value || '').replace(/[^a-z0-9_-]/gi, '');
   return cleaned || fallback;
@@ -89,6 +110,15 @@ function formatSupabaseError(err) {
   return parts.filter(Boolean).join(' • ');
 }
 
+function maybeAddMfaHint(message) {
+  const msg = String(message || '');
+  const low = msg.toLowerCase();
+  if (low.includes('totp') || low.includes('authenticator') || low.includes('invalid') || low.includes('mfa')) {
+    return msg + ' (Tips: sjekk at du skriv inn fersk 6-sifra kode, og at klokke/tidssone på mobilen står på automatisk.)';
+  }
+  return msg;
+}
+
 async function initAuth() {
   const client = getSupabaseClient();
   if (!client || !client.auth) return;
@@ -130,7 +160,7 @@ async function fetchMyProfile() {
 
   try {
     const { data, error } = await withTimeout(
-      client.from('users').select('*').eq('id', uid).maybeSingle(), 
+      client.from('users').select('*').eq('id', uid).single(),
       8000,
       'fetchMyProfile'
     );
@@ -2128,7 +2158,7 @@ function renderSettings() {
       ${state.mfa?.enroll ? `
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
           <div style="font-size:12px;font-weight:600;margin-bottom:8px;">Skann QR-kode i Authenticator</div>
-          ${state.mfa.enroll.qr ? `<img src="${state.mfa.enroll.qr}" alt="MFA QR" style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;"/>` : ''}
+          ${state.mfa.enroll.qr ? renderMfaQr(state.mfa.enroll.qr) : ''}
           ${state.mfa.enroll.secret ? `<div style="margin-top:8px;color:var(--text-muted);font-size:11px;word-break:break-all;">Secret: <code>${escapeHTML(state.mfa.enroll.secret)}</code></div>` : ''}
           <label class="label" style="margin-top:10px;">Kode</label>
           <input class="input" id="mfaEnrollCode" inputmode="numeric" placeholder="123456" autocomplete="one-time-code">
@@ -2358,8 +2388,10 @@ function attachEvents() {
             await completeMfaEnroll(code);
             showToast('✅ MFA er aktivert', 'success');
           } catch (e) {
-            state.mfa.error = formatSupabaseError(e);
-            showToast('❌ MFA-verifisering feila: ' + formatSupabaseError(e), 'warning');
+            const base = formatSupabaseError(e);
+            const msg = maybeAddMfaHint(base);
+            state.mfa.error = msg;
+            showToast('❌ MFA-verifisering feila: ' + msg, 'warning');
           } finally {
             state.mfa.isBusy = false;
             render();
@@ -2420,8 +2452,10 @@ function attachEvents() {
               showToast('✅ MFA verifisert', 'success');
             }
           } catch (e) {
-            state.mfa.error = formatSupabaseError(e);
-            showToast('❌ MFA feila: ' + formatSupabaseError(e), 'warning');
+	            const base = formatSupabaseError(e);
+	            const msg = maybeAddMfaHint(base);
+	            state.mfa.error = msg;
+	            showToast('❌ MFA feila: ' + msg, 'warning');
           } finally {
             state.mfa.isBusy = false;
             render();
