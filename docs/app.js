@@ -1231,6 +1231,9 @@ function renderModal() {
 // EVENT LISTENERS
 // ============================================
 function attachEvents() {
+  // Helpers for auto-tekst i kommentar (OK/IA)
+  const isAutoText = (val, t) => (val || '').trim().toUpperCase() === String(t).trim().toUpperCase();
+
   // Navigation
   document.querySelectorAll('[data-view]').forEach(el => {
     el.onclick = () => {
@@ -1300,6 +1303,20 @@ function attachEvents() {
       const item = state.items.find(i => i.id === el.dataset.item);
       if (item) {
         item.checked = !item.checked;
+
+        // Auto: når ein kryssar av (utan avvik/IA), sett kommentar til "OK" (dersom tom eller auto-OK)
+        if (item.checked) {
+          if (!item.deviation && !item.ia) {
+            if (!item.comment || isAutoText(item.comment, 'OK')) item.comment = 'OK';
+          } else {
+            // Dersom ein går over til IA/avvik, rydd vekk auto-OK
+            if (isAutoText(item.comment, 'OK')) item.comment = '';
+          }
+        } else {
+          // Når ein fjernar avkryssing: fjern auto-OK
+          if (isAutoText(item.comment, 'OK')) item.comment = '';
+        }
+
         // Dersom ein fjernar avkryssing, skal IA også fjernast
         if (!item.checked && item.ia) {
           item.ia = false;
@@ -1326,7 +1343,8 @@ function attachEvents() {
         item.deviation = false;
         item.corrected = false;
         item.installer = false;
-        if (!item.comment) item.comment = 'IA';
+        // Overstyr auto-OK eller tom kommentar
+        if (!item.comment || isAutoText(item.comment, 'OK')) item.comment = 'IA';
 
         // Hoppe til neste item (2.1 -> 2.2 osv.)
         const idx = state.items.findIndex(i => i.id === item.id);
@@ -1340,6 +1358,11 @@ function attachEvents() {
       } else {
         // Rydd opp kommentar dersom den berre var "IA"
         if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
+
+        // Dersom punktet framleis er avkryssa og ikkje avvik: sett auto-OK dersom tom
+        if (item.checked && !item.deviation) {
+          if (!item.comment) item.comment = 'OK';
+        }
       }
 
       render();
@@ -1357,8 +1380,17 @@ function attachEvents() {
           item.ia = false;
           if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
         }
+
+        // Dersom ein slår på avvik: rydd vekk auto-OK
+        if (!item.deviation && isAutoText(item.comment, 'OK')) item.comment = '';
+
         item.deviation = !item.deviation;
         if (!item.deviation) { item.corrected = false; item.installer = false; }
+
+        // Dersom avvik blir slått AV og punktet er avkryssa (utan IA): sett auto-OK dersom tom
+        if (!item.deviation && item.checked && !item.ia) {
+          if (!item.comment) item.comment = 'OK';
+        }
         render();
       }
     };
