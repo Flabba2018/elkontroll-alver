@@ -5,8 +5,9 @@
 
 const STORAGE_KEY = 'elkontroll_';
 
-// Lokal referanse til Supabase-klient (henta frå window.supabaseClient)
-let supabase = null;
+// Intern referanse til Supabase-klient
+// Brukar unikt namn for å unngå konflikt med window.supabase frå CDN
+var _sbClient = null;
 
 // Fallback dersom config.js ikkje lastar (GitHub Pages / caching / path)
 const APP_VERSION_SAFE = (typeof APP_VERSION === 'string' && APP_VERSION.trim()) ? APP_VERSION : 'dev';
@@ -47,16 +48,16 @@ function ensureSupabaseReady() {
 }
 
 function getSupabaseClient() {
-  if (supabase && typeof supabase.from === 'function') return supabase;
+  if (_sbClient && typeof _sbClient.from === 'function') return _sbClient;
   if (window.supabaseClient && typeof window.supabaseClient.from === 'function') {
-    supabase = window.supabaseClient;
-    return supabase;
+    _sbClient = window.supabaseClient;
+    return _sbClient;
   }
   if (window.supabase && typeof window.supabase.createClient === 'function' && typeof SUPABASE_URL === 'string') {
     try {
-      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      window.supabaseClient = supabase;
-      return supabase;
+      _sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      window.supabaseClient = _sbClient;
+      return _sbClient;
     } catch (e) {
       console.warn('⚠️ Supabase init feila:', e);
     }
@@ -1686,10 +1687,10 @@ function attachEvents() {
       const insp = state.inspections.find(i => i.id === el.dataset.insp);
       if (insp) {
         // Hent items for denne kontrollen (med timeout)
-        if (supabase && state.isOnline) {
+        if (_sbClient && state.isOnline) {
           try {
             const { data: items, error } = await withTimeout(
-              supabase
+              _sbClient
                 .from('inspection_items')
                 .select('*')
                 .eq('inspection_id', insp.id),
