@@ -326,7 +326,8 @@ async function saveInspectionToSupabase(inspection) {
         address: inspection.address,
         suffix: inspection.suffix,
         full_address: inspection.fullAddress,
-        user_id: inspection.userId || state.currentUser?.id || null,
+        user_id: (inspection.userId && inspection.userId.includes('-')) ? inspection.userId : 
+                 (state.currentUser?.id && state.currentUser.id.includes('-')) ? state.currentUser.id : null,
         inspection_date: inspection.date,
         work_order: inspection.workOrder || null,
         is_external: inspection.form.isExternal,
@@ -491,6 +492,107 @@ async function syncPendingData(force = false) {
     state.lastSyncError = errors[0].msg;
     showToast(`❌ Synk feila (${errors.length}). Prøv igjen`, 'warning');
     render();
+  }
+}
+
+// ============================================
+// ADMIN FUNCTIONS
+// ============================================
+async function deleteAllInspections() {
+  try {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    
+    // Slett i riktig rekkefølge (foreign keys)
+    showToast('🗑️ Slettar kontrollar...', 'warning');
+    
+    await client.from('deviations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await client.from('inspection_photos').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await client.from('inspection_items').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await client.from('inspections').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    
+    state.inspections = [];
+    showToast('✅ Alle kontrollar sletta', 'success');
+    console.log('✅ Alle kontrollar sletta frå database');
+    render();
+  } catch (e) {
+    console.error('❌ Feil ved sletting:', e);
+    showToast('❌ Kunne ikkje slette: ' + (e.message || e), 'warning');
+  }
+}
+
+async function deleteInspection(inspectionId) {
+  try {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    
+    // Slett relaterte data først
+    await client.from('deviations').delete().eq('inspection_id', inspectionId);
+    await client.from('inspection_photos').delete().eq('inspection_id', inspectionId);
+    await client.from('inspection_items').delete().eq('inspection_id', inspectionId);
+    await client.from('inspections').delete().eq('id', inspectionId);
+    
+    // Oppdater lokal state
+    state.inspections = state.inspections.filter(i => i.id !== inspectionId);
+    state.viewInspection = null;
+    state.view = 'search';
+    
+    showToast('✅ Kontroll sletta', 'success');
+    console.log('✅ Kontroll sletta:', inspectionId);
+    render();
+  } catch (e) {
+    console.error('❌ Feil ved sletting:', e);
+    showToast('❌ Kunne ikkje slette: ' + (e.message || e), 'warning');
+  }
+}
+
+async function updateUserRole(userId, newRole) {
+  try {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    
+    const { error } = await client
+      .from('users')
+      .update({ role: newRole })
+      .eq('id', userId);
+    
+    if (error) throw error;
+    
+    // Oppdater lokal state
+    const user = state.users.find(u => u.id === userId);
+    if (user) user.role = newRole;
+    
+    showToast(`✅ Rolle oppdatert til ${newRole}`, 'success');
+    console.log('✅ Rolle oppdatert:', userId, newRole);
+    render();
+  } catch (e) {
+    console.error('❌ Feil ved oppdatering:', e);
+    showToast('❌ Kunne ikkje oppdatere: ' + (e.message || e), 'warning');
+  }
+}
+
+async function addNewUser(name, role = 'user') {
+  try {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    
+    const { data, error } = await client
+      .from('users')
+      .insert({ name, role, active: true })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    state.users.push(data);
+    state.modal = null;
+    
+    showToast(`✅ Brukar "${name}" lagt til`, 'success');
+    console.log('✅ Ny brukar:', data);
+    render();
+  } catch (e) {
+    console.error('❌ Feil ved opprettelse:', e);
+    showToast('❌ Kunne ikkje legge til: ' + (e.message || e), 'warning');
   }
 }
 
@@ -1003,12 +1105,20 @@ function renderLogin() {
 function renderHome() {
   const recent = state.inspections.slice(0, 5);
   const totalDevs = state.inspections.reduce((sum, i) => sum + (i.deviation_count || 0), 0);
+  const isViewer = state.currentUser?.role === 'viewer';
+  
+  // Viewer får ikkje starte nye kontrollar
+  const actionButtons = isViewer ? `
+    <p style="color:var(--text-muted);font-size:12px;font-style:italic;">Du har lese-tilgang. Kontakt admin for å få skrive-tilgang.</p>
+  ` : `
+    <button class="btn btn-primary" data-action="newControl">⚡ Start ny kontroll</button>
+    <button class="btn btn-secondary" data-action="externalControl">🔧 Registrer ekstern kontroll</button>
+  `;
   
   return `
     <div class="card">
-      <h3>👋 Hei, ${escapeHTML(state.currentUser?.name || '')}!</h3>
-      <button class="btn btn-primary" data-action="newControl">⚡ Start ny kontroll</button>
-      <button class="btn btn-secondary" data-action="externalControl">🔧 Registrer ekstern kontroll</button>
+      <h3>👋 Hei, ${escapeHTML(state.currentUser?.name || '')}!${isViewer ? ' <span style="color:var(--text-muted);font-size:12px;">(Lesar)</span>' : ''}</h3>
+      ${actionButtons}
     </div>
     
     ${state.pendingSync.length > 0 ? `
@@ -1289,6 +1399,7 @@ function renderDetail() {
   if (!i) return '';
 
   const isLocal = !!i.__local || !!i.localId;
+  const isAdmin = state.currentUser?.role === 'admin';
   const addr = i.full_address || i.fullAddress || i.address || '';
   const date = i.inspection_date || i.date || '';
   const devCount = i.deviation_count ?? i.deviationCount ?? 0;
@@ -1296,6 +1407,11 @@ function renderDetail() {
   const correctedCount = i.corrected_count ?? (i.items ? i.items.filter(x => x.corrected).length : 0);
   const workOrder = i.work_order || i.workOrder || '';
   const isExternal = i.is_external ?? i.form?.isExternal;
+
+  // Sletteknapp kun for admin
+  const deleteBtn = isAdmin && !isLocal ? `
+    <button class="btn btn-small btn-ghost" data-action="deleteInspection" style="margin-top:12px;color:var(--danger);">🗑️ Slett kontroll</button>
+  ` : '';
 
   return `
     <button class="btn btn-secondary btn-small" data-action="back" style="margin-bottom:12px;">← Tilbake</button>
@@ -1319,11 +1435,43 @@ function renderDetail() {
     <button class="btn btn-primary" data-action="viewReport">📄 Vis rapport</button>
     <button class="btn btn-secondary" data-action="${isLocal ? 'downloadLocalReport' : 'downloadReport'}">📥 Last ned Word</button>
     ${isLocal && state.isOnline ? '<button class="btn btn-secondary" data-action="syncThisLocal" style="margin-top:8px;">🔄 Synk denne</button>' : ''}
+    ${deleteBtn}
   `;
 }
 
 function renderSettings() {
   const isAdmin = state.currentUser?.role === 'admin';
+  const isViewer = state.currentUser?.role === 'viewer';
+  
+  // Brukaradmin-liste (kun for admin)
+  const userAdminHTML = isAdmin ? `
+    <div class="card">
+      <h3>👥 Brukaradministrasjon</h3>
+      <p style="color:var(--text-muted);font-size:11px;margin-bottom:10px;">Endre roller for brukarar</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${state.users.map(u => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:var(--bg-dark);border-radius:8px;">
+            <span style="font-size:13px;">${u.name}</span>
+            <select data-userid="${u.id}" data-action="changeRole" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;">
+              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>👑 Admin</option>
+              <option value="user" ${u.role === 'user' ? 'selected' : ''}>👤 Brukar</option>
+              <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>👁️ Lesar</option>
+            </select>
+          </div>
+        `).join('')}
+      </div>
+      <button class="btn btn-small btn-secondary" data-action="addUser" style="margin-top:12px;">➕ Legg til brukar</button>
+    </div>
+  ` : '';
+  
+  // Database-admin (kun for admin)
+  const dbAdminHTML = isAdmin ? `
+    <div class="card" style="border-color:var(--danger);">
+      <h3>🗄️ Database-admin</h3>
+      <p style="color:var(--text-muted);font-size:11px;margin-bottom:10px;">⚠️ Desse handlingane kan ikkje angrast</p>
+      <button class="btn btn-small btn-ghost" data-action="deleteAllTestData" style="color:var(--danger);">🧹 Slett alle test-kontrollar</button>
+    </div>
+  ` : '';
   
   return `
     <h2 style="font-size:16px;margin-bottom:12px;">⚙️ Innstillingar</h2>
@@ -1331,7 +1479,9 @@ function renderSettings() {
     <div class="card">
       <h3>👤 Innlogga som</h3>
       <p style="font-size:14px;">${state.currentUser?.name} 
-        <span class="badge ${isAdmin ? 'badge-orange' : 'badge-gray'}">${isAdmin ? 'Admin' : 'Brukar'}</span>
+        <span class="badge ${isAdmin ? 'badge-orange' : isViewer ? 'badge-blue' : 'badge-gray'}">
+          ${isAdmin ? '👑 Admin' : isViewer ? '👁️ Lesar' : '👤 Brukar'}
+        </span>
       </p>
       <button class="btn btn-secondary" data-action="logout" style="margin-top:10px;">🚪 Logg ut</button>
     </div>
@@ -1346,6 +1496,9 @@ function renderSettings() {
         '<button class="btn btn-small btn-secondary" data-action="syncNow" style="margin-top:8px;">🔄 Synk no</button>' : ''}
       <button class="btn btn-small btn-ghost" data-action="wipeLocal" style="margin-top:8px;">🗑️ Slett lokal data</button>
     </div>
+    
+    ${userAdminHTML}
+    ${dbAdminHTML}
     
     <div class="card">
       <h3>ℹ️ Om</h3>
@@ -1429,6 +1582,43 @@ function renderModal() {
             ${generateWordHTML(state.viewInspection).replace(/<\/?html>|<\/?head>|<\/?body>|<style[^>]*>.*?<\/style>|<meta[^>]*>/gs, '')}
           </div>
           <button class="btn btn-primary" data-action="closeModal" style="margin-top:10px;">Lukk</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  if (state.modal === 'addUser') {
+    return `
+      <div class="modal">
+        <div class="modal-content">
+          <h3>➕ Legg til brukar</h3>
+          <label class="label">Namn</label>
+          <input type="text" id="newUserName" class="input" placeholder="Fullt namn" style="margin-bottom:12px;">
+          <label class="label">Rolle</label>
+          <select id="newUserRole" class="input" style="margin-bottom:12px;">
+            <option value="user">👤 Brukar</option>
+            <option value="viewer">👁️ Lesar</option>
+            <option value="admin">👑 Admin</option>
+          </select>
+          <button class="btn btn-primary" data-action="confirmAddUser">➕ Legg til</button>
+          <button class="btn btn-ghost" data-action="closeModal">Avbryt</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  if (state.modal === 'confirmDelete') {
+    return `
+      <div class="modal">
+        <div class="modal-content">
+          <h3 style="color:var(--danger);">🗑️ Slett kontroll</h3>
+          <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+            Er du sikker på at du vil slette denne kontrollen?<br>
+            <strong>${state.viewInspection?.full_address || state.viewInspection?.fullAddress || ''}</strong>
+          </p>
+          <p style="color:var(--danger);font-size:11px;margin-bottom:12px;">⚠️ Dette kan ikkje angrast!</p>
+          <button class="btn btn-small" style="background:var(--danger);" data-action="confirmDeleteInspection">🗑️ Ja, slett</button>
+          <button class="btn btn-ghost" data-action="closeModal">Avbryt</button>
         </div>
       </div>
     `;
@@ -1539,8 +1729,53 @@ function attachEvents() {
             showToast('🗑️ Lokal data sletta', 'warning');
           }
           break;
+        case 'deleteAllTestData':
+          if (state.currentUser?.role !== 'admin') {
+            showToast('❌ Kun admin kan slette', 'warning');
+            break;
+          }
+          if (confirm('⚠️ ÅTVARING: Slette ALLE kontrollar frå databasen?\n\nDette kan ikkje angrast!')) {
+            deleteAllInspections();
+          }
+          break;
+        case 'addUser':
+          state.modal = 'addUser';
+          break;
+        case 'confirmAddUser':
+          const nameInput = document.getElementById('newUserName');
+          const roleInput = document.getElementById('newUserRole');
+          if (nameInput && nameInput.value.trim()) {
+            addNewUser(nameInput.value.trim(), roleInput?.value || 'user');
+          } else {
+            showToast('⚠️ Skriv inn eit namn', 'warning');
+          }
+          return;
+        case 'deleteInspection':
+          if (state.currentUser?.role !== 'admin') {
+            showToast('❌ Kun admin kan slette', 'warning');
+            break;
+          }
+          state.modal = 'confirmDelete';
+          break;
+        case 'confirmDeleteInspection':
+          if (state.viewInspection?.id) {
+            deleteInspection(state.viewInspection.id);
+            state.modal = null;
+          }
+          return;
       }
       render();
+    };
+  });
+  
+  // Role change (admin only)
+  document.querySelectorAll('select[data-action="changeRole"]').forEach(el => {
+    el.onchange = () => {
+      const userId = el.dataset.userid;
+      const newRole = el.value;
+      if (state.currentUser?.role === 'admin') {
+        updateUserRole(userId, newRole);
+      }
     };
   });
   
