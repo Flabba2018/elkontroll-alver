@@ -97,6 +97,8 @@ async function initAuth() {
     const { data, error } = await client.auth.getSession();
     if (error) console.warn('⚠️ auth.getSession:', error);
     state.auth.session = data?.session || null;
+    // Oppdater MFA-status dersom støtta
+    try { await refreshMfaState(); } catch(e) {}
   } catch (e) {
     console.warn('⚠️ auth.getSession exception:', e);
     state.auth.session = null;
@@ -106,6 +108,7 @@ async function initAuth() {
   try {
     client.auth.onAuthStateChange((_event, session) => {
       state.auth.session = session || null;
+      try { refreshMfaState(); } catch(e) {}
       // Ved logout: tilbake til login
       if (!session) {
         state.isLoggedIn = false;
@@ -170,16 +173,35 @@ async function signInWithEmailPassword(email, password) {
     state.isLoggedIn = true;
     state.view = 'home';
 
+    // Etter login: krev MFA dersom brukar har aktivert TOTP
+    await refreshMfaState();
+    if (state.mfa.hasFactor && state.mfa.aal !== 'aal2') {
+      state.auth.pendingAfterMfa = true;
+      state.mfa.returnView = 'home';
+      await startMfaChallenge('login');
+      state.view = 'mfa';
+      return;
+    }
+
     // Etter login: hent data + prøv sync
-    await fetchInspections();
-    if (state.currentUser?.role === 'admin') await fetchUsers();
-    if (state.isOnline) syncPendingData(true).catch(() => {});
+    await finalizePostLogin();
   } catch (e) {
     state.auth.error = formatSupabaseError(e);
     throw e;
   } finally {
     state.auth.isBusy = false;
     render();
+  }
+}
+
+
+async function finalizePostLogin() {
+  try {
+    await fetchInspections();
+    if (state.currentUser?.role === 'admin') await fetchUsers();
+    if (state.isOnline) syncPendingData(true).catch(() => {});
+  } finally {
+    state.auth.pendingAfterMfa = false;
   }
 }
 
@@ -191,6 +213,8 @@ async function signOut() {
   state.auth.profile = null;
   state.isLoggedIn = false;
   state.currentUser = null;
+  state.auth.pendingAfterMfa = false;
+  state.mfa = { aal: 'aal1', factors: [], hasFactor: false, isBusy: false, error: null, challenge: null, enroll: null, returnView: 'home' };
   state.view = 'login';
   render();
 }
@@ -205,6 +229,155 @@ async function sendPasswordReset(email) {
     'auth.resetPasswordForEmail'
   );
   if (error) throw error;
+}
+
+// ============================================
+// MFA (TOTP) - CLIENT SIDE FLOW
+// ============================================
+function decodeJwtPayload(token) {
+  try {
+    const part = String(token || '').split('.')[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const json = atob(b64 + pad);
+    return JSON.parse(json);
+  } catch (e) {
+    return null;
+  }
+}
+
+function getCurrentAALFromSession(session) {
+  const token = session?.access_token;
+  const payload = decodeJwtPayload(token);
+  // Supabase brukar normalt 'aal' claim (aal1/aal2)
+  return payload?.aal || payload?.authenticator_assurance_level || 'aal1';
+}
+
+async function refreshMfaState() {
+  const client = getSupabaseClient();
+  if (!client?.auth?.mfa) return;
+
+  try {
+    const { data, error } = await withTimeout(client.auth.mfa.listFactors(), 8000, 'auth.mfa.listFactors');
+    if (error) throw error;
+
+    // data.totp er typisk lista vi treng
+    const totp = Array.isArray(data?.totp) ? data.totp : [];
+    state.mfa.factors = totp;
+    state.mfa.hasFactor = totp.length > 0;
+    state.mfa.aal = getCurrentAALFromSession(state.auth.session);
+    state.mfa.error = null;
+  } catch (e) {
+    console.warn('⚠️ MFA listFactors feila:', e);
+    state.mfa.factors = [];
+    state.mfa.hasFactor = false;
+    state.mfa.aal = getCurrentAALFromSession(state.auth.session);
+    state.mfa.error = formatSupabaseError(e);
+  }
+}
+
+// Start MFA-challenge for innlogging/verifisering
+async function startMfaChallenge(mode = 'login') {
+  const client = getSupabaseClient();
+  if (!client?.auth?.mfa) throw new Error('MFA er ikkje tilgjengeleg i Supabase-klienten');
+
+  await refreshMfaState();
+
+  const factor = state.mfa.factors[0];
+  if (!factor?.id) throw new Error('Ingen TOTP-faktor funnen. Aktiver MFA først.');
+
+  const { data, error } = await withTimeout(
+    client.auth.mfa.challenge({ factorId: factor.id }),
+    12000,
+    'auth.mfa.challenge'
+  );
+  if (error) throw error;
+
+  state.mfa.challenge = { factorId: factor.id, challengeId: data?.id, mode };
+  state.mfa.error = null;
+}
+
+// Verifiser kode og oppdater session til AAL2
+async function verifyMfaCode(code) {
+  const client = getSupabaseClient();
+  if (!client?.auth?.mfa) throw new Error('MFA er ikkje tilgjengeleg i Supabase-klienten');
+
+  const c = state.mfa.challenge;
+  if (!c?.factorId || !c?.challengeId) throw new Error('MFA-challenge manglar. Start på nytt.');
+
+  const clean = String(code || '').trim().replace(/\s+/g, '');
+  if (!clean) throw new Error('Skriv inn koden frå Authenticator-appen.');
+
+  const { error } = await withTimeout(
+    client.auth.mfa.verify({ factorId: c.factorId, challengeId: c.challengeId, code: clean }),
+    12000,
+    'auth.mfa.verify'
+  );
+  if (error) throw error;
+
+  // Oppdater session og MFA-status
+  const { data: sessData } = await client.auth.getSession();
+  state.auth.session = sessData?.session || state.auth.session;
+
+  await refreshMfaState();
+  state.mfa.challenge = null;
+  state.mfa.error = null;
+}
+
+// Start enrollment (TOTP) og vis QR/secret
+async function startMfaEnroll() {
+  const client = getSupabaseClient();
+  if (!client?.auth?.mfa) throw new Error('MFA er ikkje tilgjengeleg i Supabase-klienten');
+
+  const { data, error } = await withTimeout(
+    client.auth.mfa.enroll({ factorType: 'totp' }),
+    12000,
+    'auth.mfa.enroll'
+  );
+  if (error) throw error;
+
+  // data.totp inneheld qr_code og secret (kan variere litt)
+  const factorId = data?.id || data?.factor?.id;
+  const qr = data?.totp?.qr_code || data?.totp?.qrCode || '';
+  const secret = data?.totp?.secret || '';
+
+  if (!factorId) throw new Error('MFA enrollment feila: manglar factorId');
+
+  state.mfa.enroll = { factorId, qr, secret };
+  state.mfa.error = null;
+}
+
+// Fullfør enrollment ved å verifisere kode (challenge + verify)
+async function completeMfaEnroll(code) {
+  const client = getSupabaseClient();
+  if (!client?.auth?.mfa) throw new Error('MFA er ikkje tilgjengeleg i Supabase-klienten');
+
+  const e = state.mfa.enroll;
+  if (!e?.factorId) throw new Error('MFA enrollment manglar. Start på nytt.');
+
+  // Challenge for den nye faktoren
+  const { data: chData, error: chErr } = await withTimeout(
+    client.auth.mfa.challenge({ factorId: e.factorId }),
+    12000,
+    'auth.mfa.challenge (enroll)'
+  );
+  if (chErr) throw chErr;
+
+  state.mfa.challenge = { factorId: e.factorId, challengeId: chData?.id, mode: 'enroll' };
+  await verifyMfaCode(code);
+
+  // Rydd
+  state.mfa.enroll = null;
+}
+
+// En enkel guard for admin-operasjonar
+function requireAdminMfa() {
+  const isAdmin = state.currentUser?.role === 'admin';
+  if (!isAdmin) return true; // ikkje admin -> ikkje relevant her
+  if (state.mfa?.aal === 'aal2') return true;
+  showToast('🔐 Admin krev MFA. Verifiser først i Innstillingar → Sikkerheit.', 'warning');
+  return false;
 }
 
 function renderFatalError(err) {
@@ -321,7 +494,21 @@ let state = {
     email: '',
     password: '',
     isBusy: false,
-    error: null
+    error: null,
+    pendingAfterMfa: false
+  },
+  mfa: {
+    // AAL (authenticator assurance level): 'aal1' (utan MFA) / 'aal2' (MFA verifisert)
+    aal: 'aal1',
+    factors: [],       // TOTP-faktorar
+    hasFactor: false,
+    isBusy: false,
+    error: null,
+    // challenge i samband med innlogging eller verifisering
+    challenge: null,   // { factorId, challengeId, mode }
+    // enrollment data når ein aktiverer MFA
+    enroll: null,      // { factorId, qr, secret }
+    returnView: 'home'
   },
   currentUser: null,
   users: [],
@@ -1394,7 +1581,7 @@ function render() {
       ${state.isLoggedIn ? renderHeader() : ''}
       ${state.toast ? `<div class="toast ${safeClassName(state.toast.type)}">${escapeHTML(state.toast.msg)}</div>` : ''}
       <div class="content">${renderView()}</div>
-      ${state.isLoggedIn && state.view !== 'login' ? renderNav() : ''}
+      ${state.isLoggedIn && state.view !== 'login' && state.view !== 'mfa' ? renderNav() : ''}
       ${renderModal()}
     </div>
   `;
@@ -1438,8 +1625,47 @@ function renderView() {
     case 'search': return renderSearch();
     case 'detail': return renderDetail();
     case 'settings': return renderSettings();
+    case 'mfa': return renderMfa();
     default: return renderHome();
   }
+}
+
+
+function renderMfa() {
+  const mode = state.mfa?.challenge?.mode || 'login';
+  const title = mode === 'enroll' ? 'Aktiver MFA' : 'MFA-verifisering';
+  const info = mode === 'login'
+    ? 'Du har MFA aktivert. Skriv inn koden frå Authenticator-appen for å fullføre innlogging.'
+    : 'Skriv inn koden frå Authenticator-appen for å fullføre.';
+  const err = state.mfa?.error ? `<div style="margin-top:10px;color:var(--danger);font-size:12px;">❌ ${escapeHTML(state.mfa.error)}</div>` : '';
+  const disabled = state.mfa?.isBusy ? 'disabled' : '';
+
+  return `
+    <div class="login-container">
+      <div class="login-card">
+        <h2>🔐 ${escapeHTML(title)}</h2>
+        <p style="text-align:center;color:var(--text-muted);margin-bottom:14px;font-size:12px;line-height:1.4;">
+          ${escapeHTML(info)}
+        </p>
+
+        <label class="label">Kode</label>
+        <input class="input" id="mfaCode" inputmode="numeric" placeholder="123456" autocomplete="one-time-code">
+
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;">
+          <button class="btn btn-primary" data-action="mfaVerify" ${disabled}>✅ Verifiser</button>
+          <button class="btn btn-secondary" data-action="mfaRestart" ${disabled}>🔄 Start på nytt</button>
+          <button class="btn btn-ghost" data-action="logout" ${disabled}>🚪 Logg ut</button>
+        </div>
+
+        ${state.mfa?.isBusy ? '<p style="text-align:center;color:var(--text-muted);font-size:11px;margin-top:12px;">Jobbar…</p>' : ''}
+        ${err}
+
+        <p style="text-align:center;color:#64748b;font-size:10px;margin-top:16px;">
+          v${APP_VERSION_SAFE}
+        </p>
+      </div>
+    </div>
+  `;
 }
 
 function renderLogin() {
@@ -1485,6 +1711,8 @@ function renderHome() {
   const recent = state.inspections.slice(0, 5);
   const totalDevs = state.inspections.reduce((sum, i) => sum + (i.deviation_count || 0), 0);
   const isViewer = state.currentUser?.role === 'viewer';
+  const isAAL2 = state.mfa?.aal === 'aal2';
+  const adminLocked = isAdmin && !isAAL2;
   
   // Viewer får ikkje starte nye kontrollar
   const actionButtons = isViewer ? `
@@ -1841,12 +2069,12 @@ function renderSettings() {
   const userAdminHTML = isAdmin ? `
     <div class="card">
       <h3>👥 Brukaradministrasjon</h3>
-      <p style="color:var(--text-muted);font-size:11px;margin-bottom:10px;">Endre roller for brukarar</p>
+      <p style="color:var(--text-muted);font-size:11px;margin-bottom:10px;">Endre roller for brukarar</p>${adminLocked ? `<p style="color:var(--warning);font-size:11px;margin-top:-4px;margin-bottom:10px;">🔐 Krev MFA: verifiser i Sikkerheit før du kan endre roller.</p>` : ``}
       <div style="display:flex;flex-direction:column;gap:8px;">
         ${state.users.map(u => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:var(--bg-dark);border-radius:8px;">
             <span style="font-size:13px;">${u.name}</span>
-            <select data-userid="${u.id}" data-action="changeRole" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;">
+            <select data-userid="${u.id}" data-action="changeRole" ${adminLocked ? "disabled" : ""} style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;">
               <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>👑 Admin</option>
               <option value="user" ${u.role === 'user' ? 'selected' : ''}>👤 Brukar</option>
               <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>👁️ Lesar</option>
@@ -1854,7 +2082,7 @@ function renderSettings() {
           </div>
         `).join('')}
       </div>
-      <button class="btn btn-small btn-secondary" data-action="addUser" style="margin-top:12px;">➕ Legg til brukar</button>
+      <button class="btn btn-small btn-secondary" data-action="addUser" style="margin-top:12px;" ${adminLocked ? "disabled" : ""}>➕ Legg til brukar</button>
     </div>
   ` : '';
   
@@ -1863,7 +2091,7 @@ function renderSettings() {
     <div class="card" style="border-color:var(--danger);">
       <h3>🗄️ Database-admin</h3>
       <p style="color:var(--text-muted);font-size:11px;margin-bottom:10px;">⚠️ Desse handlingane kan ikkje angrast</p>
-      <button class="btn btn-small btn-ghost" data-action="deleteAllTestData" style="color:var(--danger);">🧹 Slett alle test-kontrollar</button>
+      <button class="btn btn-small btn-ghost" data-action="deleteAllTestData" style="color:var(--danger);" ${adminLocked ? "disabled" : ""}>🧹 Slett alle test-kontrollar</button>
     </div>
   ` : '';
   
@@ -1878,6 +2106,33 @@ function renderSettings() {
         </span>
       </p>
       <button class="btn btn-secondary" data-action="logout" style="margin-top:10px;">🚪 Logg ut</button>
+    </div>
+
+    <div class="card">
+      <h3>🔐 Sikkerheit</h3>
+      <p style="color:var(--text-muted);font-size:12px;line-height:1.45;">
+        MFA (Authenticator): <strong>${state.mfa?.hasFactor ? 'Aktivert' : 'Ikkje aktivert'}</strong><br>
+        Verifisert (AAL2): <strong>${state.mfa?.aal === 'aal2' ? 'Ja' : 'Nei'}</strong>
+        ${isAdmin && adminLocked ? '<br><span style="color:var(--warning);">Admin-funksjonar er sperra utan MFA.</span>' : ''}
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
+        ${!state.mfa?.hasFactor ? '<button class="btn btn-small btn-primary" data-action="mfaEnrollStart">➕ Aktiver MFA</button>' : ''}
+        ${state.mfa?.hasFactor && state.mfa?.aal !== 'aal2' ? '<button class="btn btn-small btn-secondary" data-action="mfaVerifyStart">✅ Verifiser MFA</button>' : ''}
+      </div>
+      ${state.mfa?.enroll ? `
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
+          <div style="font-size:12px;font-weight:600;margin-bottom:8px;">Skann QR-kode i Authenticator</div>
+          ${state.mfa.enroll.qr ? `<img src="${state.mfa.enroll.qr}" alt="MFA QR" style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;"/>` : ''}
+          ${state.mfa.enroll.secret ? `<div style="margin-top:8px;color:var(--text-muted);font-size:11px;word-break:break-all;">Secret: <code>${escapeHTML(state.mfa.enroll.secret)}</code></div>` : ''}
+          <label class="label" style="margin-top:10px;">Kode</label>
+          <input class="input" id="mfaEnrollCode" inputmode="numeric" placeholder="123456" autocomplete="one-time-code">
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+            <button class="btn btn-small btn-primary" data-action="mfaEnrollComplete">✅ Fullfør</button>
+            <button class="btn btn-small btn-ghost" data-action="mfaEnrollCancel">Avbryt</button>
+          </div>
+        </div>
+      ` : ''}
+      ${state.mfa?.error ? `<div style="margin-top:10px;color:var(--danger);font-size:11px;">❌ ${escapeHTML(state.mfa.error)}</div>` : ''}
     </div>
     
     <div class="card">
@@ -2071,6 +2326,103 @@ function attachEvents() {
           }
           return;
         }
+
+        case 'mfaEnrollStart': {
+          try {
+            state.mfa.isBusy = true;
+            state.mfa.error = null;
+            render();
+            await startMfaEnroll();
+            showToast('✅ MFA-oppsett starta. Skann QR-koden.', 'success');
+          } catch (e) {
+            state.mfa.error = formatSupabaseError(e);
+            showToast('❌ MFA-oppsett feila: ' + formatSupabaseError(e), 'warning');
+          } finally {
+            state.mfa.isBusy = false;
+            render();
+          }
+          return;
+        }
+        case 'mfaEnrollComplete': {
+          const code = (document.getElementById('mfaEnrollCode')?.value || '').trim();
+          try {
+            state.mfa.isBusy = true;
+            state.mfa.error = null;
+            render();
+            await completeMfaEnroll(code);
+            showToast('✅ MFA er aktivert', 'success');
+          } catch (e) {
+            state.mfa.error = formatSupabaseError(e);
+            showToast('❌ MFA-verifisering feila: ' + formatSupabaseError(e), 'warning');
+          } finally {
+            state.mfa.isBusy = false;
+            render();
+          }
+          return;
+        }
+        case 'mfaEnrollCancel':
+          state.mfa.enroll = null;
+          state.mfa.error = null;
+          render();
+          return;
+
+        case 'mfaVerifyStart': {
+          try {
+            state.mfa.isBusy = true;
+            state.mfa.error = null;
+            state.mfa.returnView = state.view || 'settings';
+            render();
+            await startMfaChallenge('verify');
+            state.view = 'mfa';
+          } catch (e) {
+            state.mfa.error = formatSupabaseError(e);
+            showToast('❌ Klarte ikkje starte MFA: ' + formatSupabaseError(e), 'warning');
+          } finally {
+            state.mfa.isBusy = false;
+            render();
+          }
+          return;
+        }
+        case 'mfaRestart': {
+          try {
+            state.mfa.error = null;
+            state.mfa.challenge = null;
+            await startMfaChallenge(state.auth.pendingAfterMfa ? 'login' : 'verify');
+            showToast('🔄 Ny MFA-kode', 'success');
+          } catch (e) {
+            state.mfa.error = formatSupabaseError(e);
+            showToast('❌ Klarte ikkje starte MFA: ' + formatSupabaseError(e), 'warning');
+          }
+          render();
+          return;
+        }
+        case 'mfaVerify': {
+          const code = (document.getElementById('mfaCode')?.value || '').trim();
+          try {
+            state.mfa.isBusy = true;
+            state.mfa.error = null;
+            render();
+            await verifyMfaCode(code);
+
+            // Dersom dette var del av innlogging: fullfør post-login
+            if (state.auth.pendingAfterMfa) {
+              await finalizePostLogin();
+              state.view = 'home';
+              showToast('✅ Innlogging fullført (MFA)', 'success');
+            } else {
+              state.view = state.mfa.returnView || 'settings';
+              showToast('✅ MFA verifisert', 'success');
+            }
+          } catch (e) {
+            state.mfa.error = formatSupabaseError(e);
+            showToast('❌ MFA feila: ' + formatSupabaseError(e), 'warning');
+          } finally {
+            state.mfa.isBusy = false;
+            render();
+          }
+          return;
+        }
+
         case 'newControl': resetForm(); state.form.isExternal = false; state.view = 'control'; break;
         case 'externalControl': resetForm(); state.form.isExternal = true; state.view = 'control'; break;
         case 'gps': getGPS(); return;
@@ -2146,14 +2498,17 @@ function attachEvents() {
             showToast('❌ Kun admin kan slette', 'warning');
             break;
           }
+          if (!requireAdminMfa()) break;
           if (confirm('⚠️ ÅTVARING: Slette ALLE kontrollar frå databasen?\n\nDette kan ikkje angrast!')) {
             deleteAllInspections();
           }
           break;
         case 'addUser':
+          if (!requireAdminMfa()) { render(); return; }
           state.modal = 'addUser';
           break;
         case 'confirmAddUser':
+          if (!requireAdminMfa()) { render(); return; }
           const nameInput = document.getElementById('newUserName');
           const roleInput = document.getElementById('newUserRole');
           if (nameInput && nameInput.value.trim()) {
@@ -2167,9 +2522,11 @@ function attachEvents() {
             showToast('❌ Kun admin kan slette', 'warning');
             break;
           }
+          if (!requireAdminMfa()) break;
           state.modal = 'confirmDelete';
           break;
         case 'confirmDeleteInspection':
+          if (!requireAdminMfa()) { render(); return; }
           if (state.viewInspection?.id) {
             deleteInspection(state.viewInspection.id);
             state.modal = null;
@@ -2201,6 +2558,7 @@ function attachEvents() {
       const userId = el.dataset.userid;
       const newRole = el.value;
       if (state.currentUser?.role === 'admin') {
+        if (!requireAdminMfa()) return;
         updateUserRole(userId, newRole);
       }
     };
