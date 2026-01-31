@@ -23,8 +23,10 @@ Internkontroll-app for elektriske installasjonar i kommunale leilegheiter.
 ## Oppsett
 
 1. Klon repoet
-2. Opne `public/index.html` i nettlesar
-3. Eller køyr `npm run dev` for lokal server
+2. Opne `docs/index.html` i nettlesar (for lokal test)
+3. Eller køyr `npm run dev` for lokal server (server `docs/`)
+
+> GitHub Pages bør peike på `docs/` som "source".
 
 ## Brukarar
 
