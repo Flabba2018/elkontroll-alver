@@ -145,7 +145,9 @@ let state = {
   isOnline: navigator.onLine,
   pendingSync: [],
   isSyncing: false,
-  isLoading: true
+  isLoading: true,
+  // brukt for å "hoppe" til neste sjekkpunkt (IA)
+  scrollToItemId: null
 };
 
 // ============================================
@@ -374,7 +376,14 @@ async function init() {
 
 function resetForm() {
   state.items = defaultItems.map(i => ({
-    ...i, checked: false, comment: '', deviation: false, corrected: false, installer: false
+    ...i,
+    checked: false,
+    // "IA" = ikkje aktuelt (teller som behandla, men ikkje avvik)
+    ia: false,
+    comment: '',
+    deviation: false,
+    corrected: false,
+    installer: false
   }));
   state.photos = [];
   state.form = {
@@ -1026,8 +1035,10 @@ function renderItem(item) {
         <div class="check-content">
           <div class="check-text ${item.checked ? 'checked' : ''}">
             <span class="check-num">${item.id}</span>${item.text}
+            ${item.ia ? '<span class="badge badge-gray" style="margin-left:6px;">IA</span>' : ''}
           </div>
           <div class="check-options">
+            <div class="check-option ${item.ia ? 'na' : ''}" data-ia="${item.id}">IA</div>
             <div class="check-option ${item.deviation ? 'active' : ''}" data-dev="${item.id}">⚠️ Avvik</div>
             ${item.deviation ? `
               <div class="check-option ${item.corrected ? 'fixed' : ''}" data-fix="${item.id}">✓ Utbetra</div>
@@ -1287,7 +1298,51 @@ function attachEvents() {
   document.querySelectorAll('[data-item]').forEach(el => {
     el.onclick = () => {
       const item = state.items.find(i => i.id === el.dataset.item);
-      if (item) { item.checked = !item.checked; render(); }
+      if (item) {
+        item.checked = !item.checked;
+        // Dersom ein fjernar avkryssing, skal IA også fjernast
+        if (!item.checked && item.ia) {
+          item.ia = false;
+          if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
+        }
+        render();
+      }
+    };
+  });
+
+  // IA (ikkje aktuelt) - marker som behandla utan avvik, og hopp til neste punkt
+  document.querySelectorAll('[data-ia]').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const id = el.dataset.ia;
+      const item = state.items.find(i => i.id === id);
+      if (!item) return;
+
+      item.ia = !item.ia;
+
+      if (item.ia) {
+        item.checked = true;
+        // IA kan ikkje vere avvik
+        item.deviation = false;
+        item.corrected = false;
+        item.installer = false;
+        if (!item.comment) item.comment = 'IA';
+
+        // Hoppe til neste item (2.1 -> 2.2 osv.)
+        const idx = state.items.findIndex(i => i.id === item.id);
+        if (idx >= 0 && idx < state.items.length - 1) {
+          const next = state.items[idx + 1];
+          if (next) {
+            state.expanded[next.catNum] = true;
+            state.scrollToItemId = next.id;
+          }
+        }
+      } else {
+        // Rydd opp kommentar dersom den berre var "IA"
+        if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
+      }
+
+      render();
     };
   });
   
@@ -1297,6 +1352,11 @@ function attachEvents() {
       e.stopPropagation();
       const item = state.items.find(i => i.id === el.dataset.dev);
       if (item) {
+        // Avvik og IA kan ikkje kombinerast
+        if (!item.deviation && item.ia) {
+          item.ia = false;
+          if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
+        }
         item.deviation = !item.deviation;
         if (!item.deviation) { item.corrected = false; item.installer = false; }
         render();
@@ -1386,6 +1446,17 @@ function attachEvents() {
       };
     }
   });
+
+  // Etter render: om IA ba om "hopp" til neste element, scroll dit
+  if (state.scrollToItemId) {
+    const targetId = state.scrollToItemId;
+    state.scrollToItemId = null;
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-item="${targetId}"]`);
+      const row = el ? el.closest('.check-item') : null;
+      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
 }
 
 // ============================================
