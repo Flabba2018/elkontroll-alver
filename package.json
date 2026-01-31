@@ -4,7 +4,11 @@
   "description": "Internkontroll elektro - Alver Kommune",
   "scripts": {
     "dev": "npx serve docs",
-    "start": "npx serve docs"
+    "start": "npx serve docs",
+    "test": "node -e \"console.log('No tests configured')\"",
+    "lint": "node -e \"console.log('No lint configured')\"",
+    "typecheck": "node -e \"console.log('No typecheck configured')\"",
+    "build": "node -e \"console.log('No build step for static docs')\""
   },
   "author": "Teknisk Forvaltning og Drift",
   "license": "UNLICENSED",
