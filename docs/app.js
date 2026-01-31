@@ -181,10 +181,11 @@ let state = {
   form: {
     address: '', suffix: '', workOrder: '',
     date: new Date().toISOString().split('T')[0],
-    voltage: '', insulation: '', continuity: '', rcd: '',
+    voltage: '', insulation: '', continuity: '', rcd: '', netType: 'TN',
     summary: '', errorsFixed: false, maintenance: false, sentInstaller: false,
     isExternal: false, externalFirma: '', externalContact: ''
   },
+  editingInspectionId: null,
   expanded: { 1: true },
   inspections: [],
   search: '',
@@ -337,6 +338,7 @@ async function saveInspectionToSupabase(inspection) {
         insulation: inspection.form.insulation || null,
         continuity: inspection.form.continuity || null,
         rcd_test: inspection.form.rcd || null,
+        net_type: inspection.form.netType || 'TN',
         errors_fixed: inspection.form.errorsFixed,
         maintenance_noted: inspection.form.maintenance,
         sent_installer: inspection.form.sentInstaller,
@@ -596,6 +598,159 @@ async function addNewUser(name, role = 'user') {
   }
 }
 
+async function loadInspectionForEdit(inspection) {
+  // Last inn eksisterande kontroll for redigering
+  const i = inspection;
+  
+  // Hent items viss dei ikkje finst
+  if (!i.items || i.items.length === 0) {
+    const client = getSupabaseClient();
+    if (client && i.id) {
+      try {
+        const { data: items } = await client
+          .from('inspection_items')
+          .select('*')
+          .eq('inspection_id', i.id);
+        i.items = items || [];
+      } catch (e) {
+        console.error('Kunne ikkje hente items:', e);
+      }
+    }
+  }
+  
+  // Sett form-data
+  state.form = {
+    address: i.address || '',
+    suffix: i.suffix || '',
+    workOrder: i.work_order || i.workOrder || '',
+    date: i.inspection_date || i.date || new Date().toISOString().split('T')[0],
+    voltage: i.voltage || i.form?.voltage || '',
+    insulation: i.insulation || i.form?.insulation || '',
+    continuity: i.continuity || i.form?.continuity || '',
+    rcd: i.rcd_test || i.form?.rcd || '',
+    netType: i.net_type || i.form?.netType || 'TN',
+    summary: i.summary || i.form?.summary || '',
+    errorsFixed: i.errors_fixed ?? i.form?.errorsFixed ?? false,
+    maintenance: i.maintenance_noted ?? i.form?.maintenance ?? false,
+    sentInstaller: i.sent_installer ?? i.form?.sentInstaller ?? false,
+    isExternal: i.is_external ?? i.form?.isExternal ?? false,
+    externalFirma: i.external_firma || i.form?.externalFirma || '',
+    externalContact: i.external_contact || i.form?.externalContact || ''
+  };
+  
+  // Sett items (frå database eller lokal)
+  if (i.items && i.items.length > 0) {
+    state.items = defaultItems.map(di => {
+      const saved = i.items.find(si => si.item_id === di.id || si.id === di.id);
+      return {
+        ...di,
+        checked: saved?.checked ?? false,
+        ia: saved?.ia ?? false,
+        comment: saved?.comment || '',
+        deviation: saved?.deviation ?? false,
+        corrected: saved?.corrected ?? false,
+        installer: saved?.requires_installer ?? saved?.installer ?? false
+      };
+    });
+  } else {
+    // Fallback til tom liste
+    state.items = defaultItems.map(di => ({
+      ...di, checked: false, ia: false, comment: '', deviation: false, corrected: false, installer: false
+    }));
+  }
+  
+  // Sett photos
+  state.photos = i.photos || [];
+  
+  // Marker at vi redigerer
+  state.editingInspectionId = i.id || i.localId || null;
+  
+  // Gå til kontroll-visning
+  state.view = 'control';
+  state.expanded = { 1: true };
+  render();
+  
+  showToast('✏️ Redigerer kontroll', 'success');
+}
+
+async function updateInspectionInSupabase(inspectionId, inspection) {
+  try {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    
+    // Oppdater hovud-inspeksjon
+    const { error: inspError } = await client
+      .from('inspections')
+      .update({
+        address: inspection.address,
+        suffix: inspection.suffix,
+        full_address: inspection.fullAddress,
+        inspection_date: inspection.date,
+        work_order: inspection.workOrder || null,
+        is_external: inspection.form.isExternal,
+        external_firma: inspection.form.externalFirma || null,
+        external_contact: inspection.form.externalContact || null,
+        voltage: inspection.form.voltage || null,
+        insulation: inspection.form.insulation || null,
+        continuity: inspection.form.continuity || null,
+        rcd_test: inspection.form.rcd || null,
+        net_type: inspection.form.netType || 'TN',
+        errors_fixed: inspection.form.errorsFixed,
+        maintenance_noted: inspection.form.maintenance,
+        sent_installer: inspection.form.sentInstaller,
+        summary: inspection.form.summary || null,
+        total_items: inspection.items.length,
+        checked_items: inspection.items.filter(i => i.checked).length,
+        deviation_count: inspection.items.filter(i => i.deviation).length,
+        corrected_count: inspection.items.filter(i => i.corrected).length,
+        progress: inspection.progress,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', inspectionId);
+    
+    if (inspError) throw inspError;
+    
+    // Slett gamle items og legg inn nye
+    await client.from('inspection_items').delete().eq('inspection_id', inspectionId);
+    
+    const itemsToInsert = inspection.items.map(item => ({
+      inspection_id: inspectionId,
+      item_id: item.id,
+      category: item.cat,
+      category_num: item.catNum,
+      item_text: item.text,
+      checked: item.checked,
+      deviation: item.deviation,
+      corrected: item.corrected,
+      requires_installer: item.installer,
+      comment: item.comment || null
+    }));
+    
+    await client.from('inspection_items').insert(itemsToInsert);
+    
+    // Oppdater avvik
+    await client.from('deviations').delete().eq('inspection_id', inspectionId);
+    const deviations = inspection.items.filter(i => i.deviation);
+    if (deviations.length > 0) {
+      const devsToInsert = deviations.map(dev => ({
+        inspection_id: inspectionId,
+        item_id: dev.id,
+        item_text: dev.text,
+        comment: dev.comment || null,
+        corrected: dev.corrected,
+        requires_installer: dev.installer
+      }));
+      await client.from('deviations').insert(devsToInsert);
+    }
+    
+    console.log('✅ Oppdatert i Supabase:', inspectionId);
+    return inspectionId;
+  } catch (e) {
+    console.error('❌ Oppdatering feila:', e);
+    throw e;
+  }
+}
+
 // ============================================
 // INIT
 // ============================================
@@ -650,10 +805,11 @@ function resetForm() {
   state.form = {
     address: '', suffix: '', workOrder: '',
     date: new Date().toISOString().split('T')[0],
-    voltage: '', insulation: '', continuity: '', rcd: '',
+    voltage: '', insulation: '', continuity: '', rcd: '', netType: 'TN',
     summary: '', errorsFixed: false, maintenance: false, sentInstaller: false,
     isExternal: false, externalFirma: '', externalContact: ''
   };
+  state.editingInspectionId = null;
   state.expanded = { 1: true };
 }
 
@@ -693,8 +849,10 @@ window.addEventListener('offline', () => {
 // SAVE INSPECTION
 // ============================================
 async function saveInspection(download = false) {
+  const isEditing = !!state.editingInspectionId;
+  
   const inspection = {
-    localId: genId(),
+    localId: isEditing ? state.editingInspectionId : genId(),
     fullAddress: getFullAddress(),
     address: state.form.address,
     suffix: state.form.suffix,
@@ -710,7 +868,34 @@ async function saveInspection(download = false) {
     timestamp: new Date().toISOString()
   };
 
-  // 1) Lagre lokalt først (alltid)
+  // Viss vi redigerer ein eksisterande kontroll i databasen
+  if (isEditing && state.isOnline) {
+    try {
+      await updateInspectionInSupabase(state.editingInspectionId, inspection);
+      showToast('✅ Kontroll oppdatert', 'success');
+      
+      // Last ned Word om ønskt
+      if (download) {
+        try { downloadWord(inspection); } catch (e) { console.error('Word-feil:', e); }
+      }
+      
+      // Oppdater lokal liste
+      await fetchInspections();
+      
+      state.modal = null;
+      state.editingInspectionId = null;
+      resetForm();
+      state.view = 'home';
+      render();
+      return;
+    } catch (e) {
+      console.error('❌ Oppdatering feila:', e);
+      showToast('❌ Kunne ikkje oppdatere: ' + (e.message || e), 'warning');
+      return;
+    }
+  }
+
+  // 1) Lagre lokalt først (alltid) - for nye kontrollar
   const localInspections = loadLocal('inspections_local', []);
   localInspections.unshift(inspection);
   const trimmed = localInspections.slice(0, 50);
@@ -1269,8 +1454,14 @@ function renderControl() {
     
     <div class="card">
       <h3>📏 Målingar</h3>
+      <label class="label">Nett-type</label>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn btn-small ${state.form.netType === 'TN' ? '' : 'btn-ghost'}" data-nettype="TN" style="${state.form.netType === 'TN' ? 'background:var(--danger);color:#fff;' : ''}">TN (400V)</button>
+        <button class="btn btn-small ${state.form.netType === 'IT' ? '' : 'btn-ghost'}" data-nettype="IT" style="${state.form.netType === 'IT' ? 'background:var(--primary);color:#fff;' : ''}">IT (230V)</button>
+        <button class="btn btn-small ${state.form.netType === 'TT' ? '' : 'btn-ghost'}" data-nettype="TT" style="${state.form.netType === 'TT' ? 'background:var(--primary);color:#fff;' : ''}">TT (230V)</button>
+      </div>
       <div class="measurements">
-        <div><label class="label">Spenning</label><input class="input" id="voltage" placeholder="230V" value="${state.form.voltage}"></div>
+        <div><label class="label">Spenning</label><input class="input" id="voltage" placeholder="${state.form.netType === 'TN' ? '400V' : '230V'}" value="${state.form.voltage}"></div>
         <div><label class="label">Isolasjon</label><input class="input" id="insulation" placeholder=">0,5MΩ" value="${state.form.insulation}"></div>
         <div><label class="label">Kontinuitet</label><input class="input" id="continuity" placeholder="OK" value="${state.form.continuity}"></div>
         <div><label class="label">Jordfeilbr.</label><input class="input" id="rcd" placeholder="OK" value="${state.form.rcd}"></div>
@@ -1400,6 +1591,7 @@ function renderDetail() {
 
   const isLocal = !!i.__local || !!i.localId;
   const isAdmin = state.currentUser?.role === 'admin';
+  const isViewer = state.currentUser?.role === 'viewer';
   const addr = i.full_address || i.fullAddress || i.address || '';
   const date = i.inspection_date || i.date || '';
   const devCount = i.deviation_count ?? i.deviationCount ?? 0;
@@ -1407,10 +1599,16 @@ function renderDetail() {
   const correctedCount = i.corrected_count ?? (i.items ? i.items.filter(x => x.corrected).length : 0);
   const workOrder = i.work_order || i.workOrder || '';
   const isExternal = i.is_external ?? i.form?.isExternal;
+  const netType = i.net_type || i.form?.netType || 'TN';
 
   // Sletteknapp kun for admin
   const deleteBtn = isAdmin && !isLocal ? `
     <button class="btn btn-small btn-ghost" data-action="deleteInspection" style="margin-top:12px;color:var(--danger);">🗑️ Slett kontroll</button>
+  ` : '';
+  
+  // Redigeringsknapp (ikkje for viewer)
+  const editBtn = !isViewer ? `
+    <button class="btn btn-secondary" data-action="editInspection" style="margin-top:8px;">✏️ Rediger kontroll</button>
   ` : '';
 
   return `
@@ -1420,6 +1618,7 @@ function renderDetail() {
       <h2 style="font-size:16px;margin-bottom:8px;">${addr}</h2>
       <div style="color:var(--text-muted);font-size:12px;line-height:1.6;">
         <div><strong>Dato:</strong> ${date}</div>
+        <div><strong>Nett:</strong> <span style="color:${netType === 'TN' ? 'var(--danger)' : 'var(--primary)'};font-weight:600;">${netType} (${netType === 'TN' ? '400V' : '230V'})</span></div>
         ${isLocal ? '<div><strong>Status:</strong> Lokalt (ikkje synka)</div>' : ''}
         ${isExternal ? `<div><strong>Ekstern:</strong> ${i.external_firma || i.form?.externalFirma || ''}</div>` : ''}
         ${workOrder ? `<div><strong>Arbeidsordre:</strong> ${workOrder}</div>` : ''}
@@ -1434,6 +1633,7 @@ function renderDetail() {
 
     <button class="btn btn-primary" data-action="viewReport">📄 Vis rapport</button>
     <button class="btn btn-secondary" data-action="${isLocal ? 'downloadLocalReport' : 'downloadReport'}">📥 Last ned Word</button>
+    ${editBtn}
     ${isLocal && state.isOnline ? '<button class="btn btn-secondary" data-action="syncThisLocal" style="margin-top:8px;">🔄 Synk denne</button>' : ''}
     ${deleteBtn}
   `;
@@ -1763,7 +1963,22 @@ function attachEvents() {
             state.modal = null;
           }
           return;
+        case 'editInspection':
+          if (state.viewInspection) {
+            loadInspectionForEdit(state.viewInspection);
+          }
+          return;
       }
+      render();
+    };
+  });
+  
+  // Nett-type knappar
+  document.querySelectorAll('[data-nettype]').forEach(el => {
+    el.onclick = () => {
+      state.form.netType = el.dataset.nettype;
+      // Auto-sett spenning
+      state.form.voltage = el.dataset.nettype === 'TN' ? '400V' : '230V';
       render();
     };
   });
