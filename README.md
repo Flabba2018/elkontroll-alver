@@ -38,3 +38,5 @@ Internkontroll-app for elektriske installasjonar i kommunale leilegheiter.
 
 Supabase-prosjekt: Elkontroll
 Tabellar: users, apartments, inspections, inspection_items, inspection_photos, deviations
+
+> Merk: `config.js` bruker Supabase anon-nøkkel i klienten. Sørg for at RLS er aktivert på alle tabellar.
