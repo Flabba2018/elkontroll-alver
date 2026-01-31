@@ -1711,6 +1711,7 @@ function renderHome() {
   const recent = state.inspections.slice(0, 5);
   const totalDevs = state.inspections.reduce((sum, i) => sum + (i.deviation_count || 0), 0);
   const isViewer = state.currentUser?.role === 'viewer';
+  const isAdmin = state.currentUser?.role === 'admin';
   const isAAL2 = state.mfa?.aal === 'aal2';
   const adminLocked = isAdmin && !isAAL2;
   
