@@ -130,7 +130,7 @@ async function fetchMyProfile() {
 
   try {
     const { data, error } = await withTimeout(
-      client.from('users').select('*').eq('id', uid).single(),
+      client.from('users').select('*').eq('id', uid).maybeSingle(), 
       8000,
       'fetchMyProfile'
     );
