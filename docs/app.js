@@ -539,6 +539,15 @@ let state = {
   lastSyncError: null,
   cancelSyncRequested: false
 };
+function getAuthFlags() {
+  const role = state.currentUser?.role || 'user';
+  const isAdmin = role === 'admin';
+  const isViewer = role === 'viewer';
+  const isAAL2 = state.mfa?.aal === 'aal2';
+  const adminLocked = isAdmin && !isAAL2;
+  return { role, isAdmin, isViewer, isAAL2, adminLocked };
+}
+
 
 // ============================================
 // LOCAL STORAGE
@@ -1708,15 +1717,10 @@ function renderLogin() {
 }
 
 function renderHome() {
-  const isAdmin = state.currentUser?.role === 'admin';
-  const isViewer = state.currentUser?.role === 'viewer';
+  const { isAdmin, isViewer, isAAL2, adminLocked } = getAuthFlags();
   const recent = state.inspections.slice(0, 5);
   const totalDevs = state.inspections.reduce((sum, i) => sum + (i.deviation_count || 0), 0);
-  const isViewer = state.currentUser?.role === 'viewer';
-  const isAdmin = state.currentUser?.role === 'admin';
-  const isAAL2 = state.mfa?.aal === 'aal2';
-  const adminLocked = isAdmin && !isAAL2;
-  
+
   // Viewer får ikkje starte nye kontrollar
   const actionButtons = isViewer ? `
     <p style="color:var(--text-muted);font-size:12px;font-style:italic;">Du har lese-tilgang. Kontakt admin for å få skrive-tilgang.</p>
@@ -2065,10 +2069,9 @@ function renderDetail() {
 }
 
 function renderSettings() {
-  const isAdmin = state.currentUser?.role === 'admin';
-  const isViewer = state.currentUser?.role === 'viewer';
-  
-  // Brukaradmin-liste (kun for admin)
+  const { isAdmin, isViewer, isAAL2, adminLocked } = getAuthFlags();
+
+// Brukaradmin-liste (kun for admin)
   const userAdminHTML = isAdmin ? `
     <div class="card">
       <h3>👥 Brukaradministrasjon</h3>
