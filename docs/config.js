@@ -9,10 +9,11 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const APP_VERSION = '3.1.0';
 
 // Initialiser Supabase klient (defensivt – ikkje krasj appen om CDN/JS feilar)
-let supabase = null;
+// NB: Bruk supabaseClient for å unngå konflikt med window.supabase frå CDN
+let supabaseClient = null;
 try {
   if (window.supabase && typeof window.supabase.createClient === 'function') {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     console.log('✅ Supabase konfigurert:', SUPABASE_URL);
   } else {
     throw new Error('Supabase-biblioteket er ikkje lasta');
@@ -21,5 +22,5 @@ try {
   console.warn('⚠️ Supabase ikkje aktiv (køyrer lokalt/offline):', e);
 }
 
-window.supabaseClient = supabase;
-window.__ELKONTROLL_SUPABASE_READY = !!supabase;
+window.supabaseClient = supabaseClient;
+window.__ELKONTROLL_SUPABASE_READY = !!supabaseClient;
