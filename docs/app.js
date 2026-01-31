@@ -249,6 +249,16 @@ function loadLocalInspections() {
   state.localInspections = loadLocal('inspections_local', []);
 }
 
+function clearLocalData() {
+  try {
+    Object.keys(localStorage)
+      .filter(key => key.startsWith(STORAGE_KEY))
+      .forEach(key => localStorage.removeItem(key));
+  } catch (e) {
+    console.warn('⚠️ Kunne ikkje slette lokal data:', e);
+  }
+}
+
 // ============================================
 // SUPABASE FUNCTIONS
 // ============================================
@@ -1330,6 +1340,7 @@ function renderSettings() {
       </p>
       ${state.isOnline && state.pendingSync.length > 0 ? 
         '<button class="btn btn-small btn-secondary" data-action="syncNow" style="margin-top:8px;">🔄 Synk no</button>' : ''}
+      <button class="btn btn-small btn-ghost" data-action="wipeLocal" style="margin-top:8px;">🗑️ Slett lokal data</button>
     </div>
     
     <div class="card">
@@ -1510,6 +1521,20 @@ function attachEvents() {
         case 'errorsFixed': state.form.errorsFixed = !state.form.errorsFixed; break;
         case 'maintenance': state.form.maintenance = !state.form.maintenance; break;
         case 'sentInstaller': state.form.sentInstaller = !state.form.sentInstaller; break;
+        case 'wipeLocal':
+          if (confirm('Slette lokal data og starte på nytt?')) {
+            clearLocalData();
+            state.pendingSync = [];
+            state.localInspections = [];
+            state.inspections = [];
+            state.currentUser = null;
+            state.isLoggedIn = false;
+            state.viewInspection = null;
+            state.view = 'login';
+            resetForm();
+            showToast('🗑️ Lokal data sletta', 'warning');
+          }
+          break;
       }
       render();
     };
