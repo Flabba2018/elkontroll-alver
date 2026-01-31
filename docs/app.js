@@ -30,6 +30,24 @@ function safeClassName(value, fallback = '') {
   return cleaned || fallback;
 }
 
+function getSupabaseClient() {
+  if (supabase && typeof supabase.from === 'function') return supabase;
+  if (window.supabaseClient && typeof window.supabaseClient.from === 'function') {
+    supabase = window.supabaseClient;
+    return supabase;
+  }
+  if (window.supabase && typeof window.supabase.createClient === 'function' && typeof SUPABASE_URL === 'string') {
+    try {
+      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      window.supabaseClient = supabase;
+      return supabase;
+    } catch (e) {
+      console.warn('⚠️ Supabase init feila:', e);
+    }
+  }
+  return null;
+}
+
 function renderFatalError(err) {
   const app = document.getElementById('app');
   if (!app) return;
@@ -223,9 +241,10 @@ function loadLocalInspections() {
 // ============================================
 async function fetchUsers() {
   try {
+    const client = getSupabaseClient();
     if (!state.isOnline) throw new Error('Offline');
-    if (!supabase) throw new Error('Supabase ikkje aktiv');
-    const query = supabase
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    const query = client
       .from('users')
       .select('*')
       .eq('active', true)
@@ -248,9 +267,10 @@ async function fetchUsers() {
 
 async function fetchInspections() {
   try {
+    const client = getSupabaseClient();
     if (!state.isOnline) throw new Error('Offline');
-    if (!supabase) throw new Error('Supabase ikkje aktiv');
-    const query = supabase
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    const query = client
       .from('inspections')
       .select('*')
       .order('inspection_date', { ascending: false })
@@ -269,10 +289,11 @@ async function fetchInspections() {
 
 async function saveInspectionToSupabase(inspection) {
   try {
-    if (!supabase) throw new Error('Supabase ikkje aktiv');
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
     // 1. Lagre hovud-inspeksjon
     const { data: inspData, error: inspError } = await withTimeout(
-      supabase
+      client
         .from('inspections')
         .insert({
         address: inspection.address,
@@ -323,7 +344,7 @@ async function saveInspectionToSupabase(inspection) {
     }));
     
     const { error: itemsError } = await withTimeout(
-      supabase.from('inspection_items').insert(itemsToInsert),
+      client.from('inspection_items').insert(itemsToInsert),
       12000,
       'insert inspection_items'
     );
@@ -340,7 +361,7 @@ async function saveInspectionToSupabase(inspection) {
       }));
       
       const { error: photosError } = await withTimeout(
-        supabase.from('inspection_photos').insert(photosToInsert),
+        client.from('inspection_photos').insert(photosToInsert),
         15000,
         'insert inspection_photos'
       );
@@ -361,7 +382,7 @@ async function saveInspectionToSupabase(inspection) {
       }));
       
       const { error: devsError } = await withTimeout(
-        supabase.from('deviations').insert(devsToInsert),
+        client.from('deviations').insert(devsToInsert),
         12000,
         'insert deviations'
       );
@@ -380,7 +401,8 @@ async function saveInspectionToSupabase(inspection) {
 
 async function syncPendingData(force = false) {
   if (!state.isOnline) return;
-  if (!supabase) {
+  const client = getSupabaseClient();
+  if (!client) {
     state.lastSyncError = 'Supabase ikkje aktiv (manglar config/CDN?)';
     showToast('❌ Kan ikkje synke: Supabase ikkje aktiv', 'warning');
     render();
