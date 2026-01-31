@@ -21,4 +21,5 @@ try {
   console.warn('⚠️ Supabase ikkje aktiv (køyrer lokalt/offline):', e);
 }
 
+window.supabaseClient = supabase;
 window.__ELKONTROLL_SUPABASE_READY = !!supabase;

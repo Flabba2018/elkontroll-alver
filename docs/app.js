@@ -16,10 +16,55 @@ function withTimeout(promise, ms, label = 'request') {
   ]);
 }
 
+function escapeHTML(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeClassName(value, fallback = '') {
+  const cleaned = String(value || '').replace(/[^a-z0-9_-]/gi, '');
+  return cleaned || fallback;
+}
+
+function ensureSupabaseReady() {
+  if (window.supabase && typeof window.supabase.createClient === 'function') {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+    script.onload = () => resolve(!!window.supabase);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+}
+
+function getSupabaseClient() {
+  if (supabase && typeof supabase.from === 'function') return supabase;
+  if (window.supabaseClient && typeof window.supabaseClient.from === 'function') {
+    supabase = window.supabaseClient;
+    return supabase;
+  }
+  if (window.supabase && typeof window.supabase.createClient === 'function' && typeof SUPABASE_URL === 'string') {
+    try {
+      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      window.supabaseClient = supabase;
+      return supabase;
+    } catch (e) {
+      console.warn('⚠️ Supabase init feila:', e);
+    }
+  }
+  return null;
+}
+
 function renderFatalError(err) {
   const app = document.getElementById('app');
   if (!app) return;
-  const msg = (err && (err.stack || err.message)) ? (err.stack || err.message) : String(err);
+  const msg = escapeHTML((err && (err.stack || err.message)) ? (err.stack || err.message) : String(err));
   app.innerHTML = `
     <div class="app">
       <div class="content">
@@ -204,14 +249,44 @@ function loadLocalInspections() {
   state.localInspections = loadLocal('inspections_local', []);
 }
 
+function clearLocalData() {
+  try {
+    Object.keys(localStorage)
+      .filter(key => key.startsWith(STORAGE_KEY))
+      .forEach(key => localStorage.removeItem(key));
+  } catch (e) {
+    console.warn('⚠️ Kunne ikkje slette lokal data:', e);
+  }
+}
+
+function describeSupabaseError(error) {
+  const msg = String(error?.message || error?.details || error || 'Ukjend feil');
+  const lower = msg.toLowerCase();
+
+  if (!window.supabase) {
+    return 'Supabase CDN blokkert/ikkje lasta';
+  }
+  if (lower.includes('row-level security') || lower.includes('permission denied')) {
+    return 'RLS blokkerer skriving/lesing';
+  }
+  if (lower.includes('does not exist') || lower.includes('column') || lower.includes('schema')) {
+    return 'Schema mismatch i Supabase';
+  }
+  if (lower.includes('jwt') || lower.includes('invalid')) {
+    return 'Ugyldig nøkkel eller token';
+  }
+  return 'Ukjend Supabase-feil';
+}
+
 // ============================================
 // SUPABASE FUNCTIONS
 // ============================================
 async function fetchUsers() {
   try {
+    const client = getSupabaseClient();
     if (!state.isOnline) throw new Error('Offline');
-    if (!supabase) throw new Error('Supabase ikkje aktiv');
-    const query = supabase
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    const query = client
       .from('users')
       .select('*')
       .eq('active', true)
@@ -234,9 +309,10 @@ async function fetchUsers() {
 
 async function fetchInspections() {
   try {
+    const client = getSupabaseClient();
     if (!state.isOnline) throw new Error('Offline');
-    if (!supabase) throw new Error('Supabase ikkje aktiv');
-    const query = supabase
+    if (!client) throw new Error('Supabase ikkje aktiv');
+    const query = client
       .from('inspections')
       .select('*')
       .order('inspection_date', { ascending: false })
@@ -255,10 +331,11 @@ async function fetchInspections() {
 
 async function saveInspectionToSupabase(inspection) {
   try {
-    if (!supabase) throw new Error('Supabase ikkje aktiv');
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase ikkje aktiv');
     // 1. Lagre hovud-inspeksjon
     const { data: inspData, error: inspError } = await withTimeout(
-      supabase
+      client
         .from('inspections')
         .insert({
         address: inspection.address,
@@ -309,7 +386,7 @@ async function saveInspectionToSupabase(inspection) {
     }));
     
     const { error: itemsError } = await withTimeout(
-      supabase.from('inspection_items').insert(itemsToInsert),
+      client.from('inspection_items').insert(itemsToInsert),
       12000,
       'insert inspection_items'
     );
@@ -326,7 +403,7 @@ async function saveInspectionToSupabase(inspection) {
       }));
       
       const { error: photosError } = await withTimeout(
-        supabase.from('inspection_photos').insert(photosToInsert),
+        client.from('inspection_photos').insert(photosToInsert),
         15000,
         'insert inspection_photos'
       );
@@ -347,7 +424,7 @@ async function saveInspectionToSupabase(inspection) {
       }));
       
       const { error: devsError } = await withTimeout(
-        supabase.from('deviations').insert(devsToInsert),
+        client.from('deviations').insert(devsToInsert),
         12000,
         'insert deviations'
       );
@@ -359,14 +436,23 @@ async function saveInspectionToSupabase(inspection) {
     return inspectionId;
     
   } catch (e) {
-    console.error('❌ Supabase lagring feila:', e);
-    throw e;
+    const summary = describeSupabaseError(e);
+    console.error('❌ Supabase lagring feila:', summary, e);
+    throw new Error(`${summary}: ${e?.message || e}`);
   }
 }
 
 async function syncPendingData(force = false) {
   if (!state.isOnline) return;
-  if (!supabase) {
+  const ready = await ensureSupabaseReady();
+  if (!ready) {
+    state.lastSyncError = 'Supabase CDN blokkert/ikkje lasta';
+    showToast('❌ Kan ikkje synke: Supabase CDN blokkert', 'warning');
+    render();
+    return;
+  }
+  const client = getSupabaseClient();
+  if (!client) {
     state.lastSyncError = 'Supabase ikkje aktiv (manglar config/CDN?)';
     showToast('❌ Kan ikkje synke: Supabase ikkje aktiv', 'warning');
     render();
@@ -398,8 +484,9 @@ async function syncPendingData(force = false) {
         removeLocalInspection(item.localId);
       } catch (e) {
         const msg = (e && (e.message || e.toString())) ? (e.message || e.toString()) : 'Ukjend feil';
-        errors.push({ localId: item.localId, address: item.fullAddress || item.address || '', msg });
-        console.error('❌ Synk feila for:', item.localId, msg);
+        const summary = describeSupabaseError(e);
+        errors.push({ localId: item.localId, address: item.fullAddress || item.address || '', msg: `${summary}: ${msg}` });
+        console.error('❌ Synk feila for:', item.localId, summary, msg);
       }
     }
   } finally {
@@ -444,6 +531,7 @@ async function init() {
     const savedUser = loadLocal('currentUser', null);
 
     // Hent data (med timeout og offline-fallback)
+    await ensureSupabaseReady();
     await fetchUsers();
     await fetchInspections();
 
@@ -862,7 +950,7 @@ function render() {
     <div class="app">
       ${!state.isOnline ? '<div class="offline-banner">📵 Offline - data lagrast lokalt</div>' : ''}
       ${state.isLoggedIn ? renderHeader() : ''}
-      ${state.toast ? `<div class="toast ${state.toast.type}">${state.toast.msg}</div>` : ''}
+      ${state.toast ? `<div class="toast ${safeClassName(state.toast.type)}">${escapeHTML(state.toast.msg)}</div>` : ''}
       <div class="content">${renderView()}</div>
       ${state.isLoggedIn && state.view !== 'login' ? renderNav() : ''}
       ${renderModal()}
@@ -878,7 +966,7 @@ function renderHeader() {
       <div class="header-row">
         <div>
           <h1><span class="logo">⚡</span> Elkontroll</h1>
-          ${state.view === 'control' ? `<div class="subtitle">${state.currentUser?.name} • ${getFullAddress() || 'Ny kontroll'}</div>` : ''}
+          ${state.view === 'control' ? `<div class="subtitle">${escapeHTML(state.currentUser?.name || '')} • ${escapeHTML(getFullAddress() || 'Ny kontroll')}</div>` : ''}
         </div>
         <div class="sync-badge ${state.isSyncing ? 'syncing' : (state.isOnline ? 'online' : 'offline')}">
           ${state.isSyncing ? '<span class="spinner"></span>' : (state.isOnline ? '🟢' : '🟡')}
@@ -922,9 +1010,9 @@ function renderLogin() {
         </p>
         <div class="users-grid">
           ${state.users.map(u => `
-            <div class="user-card" data-user="${u.id}">
-              <div class="avatar">${u.name.charAt(0)}</div>
-              <div class="name">${u.name}</div>
+            <div class="user-card" data-user="${escapeHTML(u.id)}">
+              <div class="avatar">${escapeHTML(u.name.charAt(0))}</div>
+              <div class="name">${escapeHTML(u.name)}</div>
               <div class="role">${u.role === 'admin' ? '👑 Admin' : '👤 Brukar'}</div>
             </div>
           `).join('')}
@@ -941,7 +1029,7 @@ function renderHome() {
   
   return `
     <div class="card">
-      <h3>👋 Hei, ${state.currentUser?.name}!</h3>
+      <h3>👋 Hei, ${escapeHTML(state.currentUser?.name || '')}!</h3>
       <button class="btn btn-primary" data-action="newControl">⚡ Start ny kontroll</button>
       <button class="btn btn-secondary" data-action="externalControl">🔧 Registrer ekstern kontroll</button>
     </div>
@@ -955,12 +1043,12 @@ function renderHome() {
           ${state.pendingSync.slice(0, 5).map(p => `
             <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--bg-dark);border:1px solid var(--border);border-radius:10px;padding:10px;">
               <div style="min-width:0;">
-                <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.fullAddress || p.address || 'Ukjend adresse'}</div>
-                <div style="color:var(--text-muted);font-size:11px;">${p.date || ''}</div>
+                <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHTML(p.fullAddress || p.address || 'Ukjend adresse')}</div>
+                <div style="color:var(--text-muted);font-size:11px;">${escapeHTML(p.date || '')}</div>
               </div>
               <div style="display:flex;gap:6px;flex-shrink:0;">
-                <button class="btn btn-small btn-secondary" data-action="viewPending" data-localid="${p.localId}">👁️</button>
-                <button class="btn btn-small btn-secondary" data-action="downloadPending" data-localid="${p.localId}">📄</button>
+                <button class="btn btn-small btn-secondary" data-action="viewPending" data-localid="${escapeHTML(p.localId)}">👁️</button>
+                <button class="btn btn-small btn-secondary" data-action="downloadPending" data-localid="${escapeHTML(p.localId)}">📄</button>
               </div>
             </div>
           `).join('')}
@@ -1279,6 +1367,7 @@ function renderSettings() {
       </p>
       ${state.isOnline && state.pendingSync.length > 0 ? 
         '<button class="btn btn-small btn-secondary" data-action="syncNow" style="margin-top:8px;">🔄 Synk no</button>' : ''}
+      <button class="btn btn-small btn-ghost" data-action="wipeLocal" style="margin-top:8px;">🗑️ Slett lokal data</button>
     </div>
     
     <div class="card">
@@ -1459,6 +1548,20 @@ function attachEvents() {
         case 'errorsFixed': state.form.errorsFixed = !state.form.errorsFixed; break;
         case 'maintenance': state.form.maintenance = !state.form.maintenance; break;
         case 'sentInstaller': state.form.sentInstaller = !state.form.sentInstaller; break;
+        case 'wipeLocal':
+          if (confirm('Slette lokal data og starte på nytt?')) {
+            clearLocalData();
+            state.pendingSync = [];
+            state.localInspections = [];
+            state.inspections = [];
+            state.currentUser = null;
+            state.isLoggedIn = false;
+            state.viewInspection = null;
+            state.view = 'login';
+            resetForm();
+            showToast('🗑️ Lokal data sletta', 'warning');
+          }
+          break;
       }
       render();
     };
