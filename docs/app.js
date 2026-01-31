@@ -147,7 +147,10 @@ let state = {
   isSyncing: false,
   isLoading: true,
   // brukt for å "hoppe" til neste sjekkpunkt (IA)
-  scrollToItemId: null
+  scrollToItemId: null,
+  localInspections: [],
+  lastSyncError: null,
+  cancelSyncRequested: false
 };
 
 // ============================================
@@ -160,12 +163,54 @@ function loadLocal(k, def) {
   try { const d = localStorage.getItem(STORAGE_KEY + k); return d ? JSON.parse(d) : def; } catch(e) { return def; }
 }
 
+function isBlank(s) { return !s || !String(s).trim(); }
+function isAutoIA(s) { return String(s || '').trim().toUpperCase() === 'IA'; }
+function isAutoOK(s) { return String(s || '').trim().toUpperCase() === 'OK'; }
+
+// Auto-tekst i kommentar: IA/OK utan å overskrive brukar-tekst
+function applyAutoComment(item) {
+  if (!item) return;
+
+  // IA har alltid prioritet
+  if (item.ia) {
+    if (isBlank(item.comment) || isAutoOK(item.comment)) item.comment = 'IA';
+    return;
+  }
+
+  // Avvik: fjern auto-OK, men ikkje rør brukar-tekst
+  if (item.deviation) {
+    if (isAutoOK(item.comment)) item.comment = '';
+    return;
+  }
+
+  // OK: berre viss punktet er avkryssa og kommentaren er tom/auto
+  if (item.checked) {
+    if (isBlank(item.comment) || isAutoOK(item.comment) || isAutoIA(item.comment)) item.comment = 'OK';
+  } else {
+    // ikkje avkryssa: rydd auto-OK/auto-IA
+    if (isAutoOK(item.comment) || isAutoIA(item.comment)) item.comment = '';
+  }
+}
+
+function removeLocalInspection(localId) {
+  if (!localId) return;
+  const locals = loadLocal('inspections_local', []);
+  const next = locals.filter(i => i.localId !== localId);
+  saveLocal('inspections_local', next);
+  state.localInspections = next;
+}
+
+function loadLocalInspections() {
+  state.localInspections = loadLocal('inspections_local', []);
+}
+
 // ============================================
 // SUPABASE FUNCTIONS
 // ============================================
 async function fetchUsers() {
   try {
     if (!state.isOnline) throw new Error('Offline');
+    if (!supabase) throw new Error('Supabase ikkje aktiv');
     const query = supabase
       .from('users')
       .select('*')
@@ -190,6 +235,7 @@ async function fetchUsers() {
 async function fetchInspections() {
   try {
     if (!state.isOnline) throw new Error('Offline');
+    if (!supabase) throw new Error('Supabase ikkje aktiv');
     const query = supabase
       .from('inspections')
       .select('*')
@@ -209,14 +255,16 @@ async function fetchInspections() {
 
 async function saveInspectionToSupabase(inspection) {
   try {
+    if (!supabase) throw new Error('Supabase ikkje aktiv');
     // 1. Lagre hovud-inspeksjon
-    const { data: inspData, error: inspError } = await supabase
-      .from('inspections')
-      .insert({
+    const { data: inspData, error: inspError } = await withTimeout(
+      supabase
+        .from('inspections')
+        .insert({
         address: inspection.address,
         suffix: inspection.suffix,
         full_address: inspection.fullAddress,
-        user_id: state.currentUser.id,
+        user_id: inspection.userId || state.currentUser?.id || null,
         inspection_date: inspection.date,
         work_order: inspection.workOrder || null,
         is_external: inspection.form.isExternal,
@@ -235,9 +283,12 @@ async function saveInspectionToSupabase(inspection) {
         deviation_count: inspection.items.filter(i => i.deviation).length,
         corrected_count: inspection.items.filter(i => i.corrected).length,
         progress: inspection.progress
-      })
-      .select()
-      .single();
+        })
+        .select()
+        .single(),
+      12000,
+      'insert inspections'
+    );
     
     if (inspError) throw inspError;
     
@@ -257,9 +308,11 @@ async function saveInspectionToSupabase(inspection) {
       comment: item.comment || null
     }));
     
-    const { error: itemsError } = await supabase
-      .from('inspection_items')
-      .insert(itemsToInsert);
+    const { error: itemsError } = await withTimeout(
+      supabase.from('inspection_items').insert(itemsToInsert),
+      12000,
+      'insert inspection_items'
+    );
     
     if (itemsError) throw itemsError;
     
@@ -272,9 +325,11 @@ async function saveInspectionToSupabase(inspection) {
         description: null
       }));
       
-      const { error: photosError } = await supabase
-        .from('inspection_photos')
-        .insert(photosToInsert);
+      const { error: photosError } = await withTimeout(
+        supabase.from('inspection_photos').insert(photosToInsert),
+        15000,
+        'insert inspection_photos'
+      );
       
       if (photosError) console.error('Bilete-feil:', photosError);
     }
@@ -291,9 +346,11 @@ async function saveInspectionToSupabase(inspection) {
         requires_installer: dev.installer
       }));
       
-      const { error: devsError } = await supabase
-        .from('deviations')
-        .insert(devsToInsert);
+      const { error: devsError } = await withTimeout(
+        supabase.from('deviations').insert(devsToInsert),
+        12000,
+        'insert deviations'
+      );
       
       if (devsError) console.error('Avvik-feil:', devsError);
     }
@@ -307,34 +364,70 @@ async function saveInspectionToSupabase(inspection) {
   }
 }
 
-async function syncPendingData() {
-  if (!state.isOnline || state.isSyncing || state.pendingSync.length === 0) return;
-  
-  state.isSyncing = true;
-  render();
-  
-  const pending = [...state.pendingSync];
-  const synced = [];
-  
-  for (const item of pending) {
-    try {
-      await saveInspectionToSupabase(item);
-      synced.push(item.localId);
-    } catch (e) {
-      console.error('Synk feila for:', item.localId);
-    }
+async function syncPendingData(force = false) {
+  if (!state.isOnline) return;
+  if (!supabase) {
+    state.lastSyncError = 'Supabase ikkje aktiv (manglar config/CDN?)';
+    showToast('❌ Kan ikkje synke: Supabase ikkje aktiv', 'warning');
+    render();
+    return;
   }
-  
-  state.pendingSync = state.pendingSync.filter(p => !synced.includes(p.localId));
-  saveLocal('pendingSync', state.pendingSync);
-  
-  if (synced.length > 0) {
-    showToast(`✅ Synkroniserte ${synced.length} kontroll(ar)`);
+  if (state.isSyncing) return;
+  if (!force && state.pendingSync.length === 0) return;
+
+  state.isSyncing = true;
+  state.cancelSyncRequested = false;
+  state.lastSyncError = null;
+  render();
+
+  const pending = [...state.pendingSync];
+  const syncedIds = [];
+  const errors = [];
+
+  try {
+    for (const item of pending) {
+      if (state.cancelSyncRequested) break;
+
+      try {
+        await withTimeout(
+          saveInspectionToSupabase(item),
+          20000,
+          `sync ${item.fullAddress || item.address || item.localId}`
+        );
+        syncedIds.push(item.localId);
+        removeLocalInspection(item.localId);
+      } catch (e) {
+        const msg = (e && (e.message || e.toString())) ? (e.message || e.toString()) : 'Ukjend feil';
+        errors.push({ localId: item.localId, address: item.fullAddress || item.address || '', msg });
+        console.error('❌ Synk feila for:', item.localId, msg);
+      }
+    }
+  } finally {
+    if (syncedIds.length > 0) {
+      state.pendingSync = state.pendingSync.filter(p => !syncedIds.includes(p.localId));
+      saveLocal('pendingSync', state.pendingSync);
+    } else {
+      saveLocal('pendingSync', state.pendingSync);
+    }
+    state.isSyncing = false;
+    render();
+  }
+
+  if (state.cancelSyncRequested) {
+    showToast('⛔ Synk stoppa', 'warning');
+    return;
+  }
+
+  if (syncedIds.length > 0) {
+    showToast(`✅ Synkroniserte ${syncedIds.length} kontroll(ar)`);
     await fetchInspections();
   }
-  
-  state.isSyncing = false;
-  render();
+
+  if (errors.length > 0) {
+    state.lastSyncError = errors[0].msg;
+    showToast(`❌ Synk feila (${errors.length}). Prøv igjen`, 'warning');
+    render();
+  }
 }
 
 // ============================================
@@ -344,6 +437,7 @@ async function init() {
   try {
     state.isLoading = true;
     state.pendingSync = loadLocal('pendingSync', []);
+    loadLocalInspections();
     render(); // vis spinner med ein gong
 
     // Sjekk innlogging
@@ -448,34 +542,34 @@ async function saveInspection(download = false) {
     progress: getProgress(),
     timestamp: new Date().toISOString()
   };
-  
-  // Lagre lokalt først
+
+  // 1) Lagre lokalt først (alltid)
   const localInspections = loadLocal('inspections_local', []);
   localInspections.unshift(inspection);
-  saveLocal('inspections_local', localInspections.slice(0, 50));
-  
-  // Prøv å lagre til Supabase
+  const trimmed = localInspections.slice(0, 50);
+  saveLocal('inspections_local', trimmed);
+  state.localInspections = trimmed;
+
+  // 2) Last ned Word umiddelbart ved behov (ikkje vent på synk)
+  if (download) {
+    try { downloadWord(inspection); } catch (e) { console.error('Word-feil:', e); }
+  }
+
+  // 3) Legg i synk-kø og prøv synk dersom online
+  const pending = loadLocal('pendingSync', []);
+  pending.unshift(inspection);
+  const seen = new Set();
+  const deduped = pending.filter(i => (seen.has(i.localId) ? false : seen.add(i.localId)));
+  state.pendingSync = deduped;
+  saveLocal('pendingSync', state.pendingSync);
+
   if (state.isOnline) {
-    try {
-      await saveInspectionToSupabase(inspection);
-      showToast('✅ Kontroll lagra!');
-      await fetchInspections();
-    } catch (e) {
-      // Legg til pending sync
-      state.pendingSync.push(inspection);
-      saveLocal('pendingSync', state.pendingSync);
-      showToast('💾 Lagra lokalt - synkar seinare', 'warning');
-    }
+    syncPendingData(true).catch(e => console.error('Synk-feil:', e));
+    showToast('💾 Lagra lokalt - prøver å synke', 'warning');
   } else {
-    state.pendingSync.push(inspection);
-    saveLocal('pendingSync', state.pendingSync);
     showToast('💾 Lagra lokalt (offline)', 'warning');
   }
-  
-  if (download) {
-    downloadWord(inspection);
-  }
-  
+
   state.modal = null;
   resetForm();
   state.view = 'home';
@@ -856,7 +950,29 @@ function renderHome() {
       <div class="card" style="border-color:var(--warning);">
         <h3 style="color:var(--warning);">⏳ Ventar på synk</h3>
         <p style="color:var(--text-muted);font-size:12px;">${state.pendingSync.length} kontroll(ar) ikkje synkronisert</p>
-        ${state.isOnline ? '<button class="btn btn-small btn-secondary" data-action="syncNow">🔄 Synk no</button>' : ''}
+
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">
+          ${state.pendingSync.slice(0, 5).map(p => `
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--bg-dark);border:1px solid var(--border);border-radius:10px;padding:10px;">
+              <div style="min-width:0;">
+                <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.fullAddress || p.address || 'Ukjend adresse'}</div>
+                <div style="color:var(--text-muted);font-size:11px;">${p.date || ''}</div>
+              </div>
+              <div style="display:flex;gap:6px;flex-shrink:0;">
+                <button class="btn btn-small btn-secondary" data-action="viewPending" data-localid="${p.localId}">👁️</button>
+                <button class="btn btn-small btn-secondary" data-action="downloadPending" data-localid="${p.localId}">📄</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        ${state.isOnline ? `
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+            ${state.isSyncing ? '<button class="btn btn-small btn-secondary" data-action="cancelSync">⛔ Stopp synk</button>' : '<button class="btn btn-small btn-secondary" data-action="syncNow">🔄 Synk no</button>'}
+          </div>
+        ` : ''}
+
+        ${state.lastSyncError ? `<div style="margin-top:10px;color:var(--danger);font-size:11px;">❌ ${state.lastSyncError}</div>` : ''}
       </div>
     ` : ''}
     
@@ -1053,32 +1169,49 @@ function renderItem(item) {
 }
 
 function renderSearch() {
-  const q = state.search.toLowerCase();
-  const results = q.length >= 2 ? 
-    state.inspections.filter(i => 
-      (i.full_address || '').toLowerCase().includes(q) || 
-      (i.inspection_date || '').includes(q)
-    ) : state.inspections;
-  
+  const q = (state.search || '').toLowerCase();
+
+  const localList = (state.pendingSync || []).map(p => ({
+    ...p,
+    __local: true,
+    id: p.localId,
+    full_address: p.fullAddress || p.address || '',
+    inspection_date: p.date || '',
+    deviation_count: p.deviationCount || 0,
+    is_external: p.form?.isExternal || false
+  }));
+
+  const remoteList = (state.inspections || []).map(i => ({ ...i, __local: false }));
+
+  const combined = [...localList, ...remoteList];
+
+  const results = q.length >= 2
+    ? combined.filter(i =>
+        (String(i.full_address || i.address || '')).toLowerCase().includes(q) ||
+        (String(i.inspection_date || i.date || '')).includes(q)
+      )
+    : combined;
+
   return `
     <h2 style="font-size:16px;margin-bottom:12px;">🔍 Søk kontrollar</h2>
     <input class="input" id="search" placeholder="Søk adresse, dato..." value="${state.search}">
-    
+
     ${results.length === 0 ? `
       <div class="card" style="text-align:center;color:#64748b;padding:40px;">
         <div style="font-size:40px;margin-bottom:10px;">🔍</div>
         <p>Ingen kontrollar funne</p>
       </div>
     ` : results.map(i => `
-      <div class="card history-item" data-insp="${i.id}">
+      <div class="card history-item" ${i.__local ? `data-local="${i.localId || i.id}"` : `data-insp="${i.id}"`}>
         <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
           <strong style="font-size:14px;">${i.full_address || i.address}</strong>
-          <span style="color:#64748b;font-size:11px;">${i.inspection_date}</span>
+          <span style="color:#64748b;font-size:11px;">${i.inspection_date || i.date || ''}</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+          ${i.__local ? '<span class="badge badge-gray">Lokalt</span>' : ''}
           ${i.is_external ? '<span class="badge badge-orange">Ekstern</span>' : ''}
-          ${(i.deviation_count || 0) > 0 ? 
-            `<span class="badge badge-red">${i.deviation_count} avvik</span>` : 
+          ${(i.deviation_count || 0) > 0 ?
+            `<span class="badge badge-red">${i.deviation_count} avvik</span>` :
             '<span class="badge badge-green">OK</span>'}
         </div>
       </div>
@@ -1089,27 +1222,38 @@ function renderSearch() {
 function renderDetail() {
   const i = state.viewInspection;
   if (!i) return '';
-  
+
+  const isLocal = !!i.__local || !!i.localId;
+  const addr = i.full_address || i.fullAddress || i.address || '';
+  const date = i.inspection_date || i.date || '';
+  const devCount = i.deviation_count ?? i.deviationCount ?? 0;
+  const checkedItems = i.checked_items ?? (i.items ? i.items.filter(x => x.checked).length : 0);
+  const correctedCount = i.corrected_count ?? (i.items ? i.items.filter(x => x.corrected).length : 0);
+  const workOrder = i.work_order || i.workOrder || '';
+  const isExternal = i.is_external ?? i.form?.isExternal;
+
   return `
     <button class="btn btn-secondary btn-small" data-action="back" style="margin-bottom:12px;">← Tilbake</button>
-    
+
     <div class="card">
-      <h2 style="font-size:16px;margin-bottom:8px;">${i.full_address || i.address}</h2>
+      <h2 style="font-size:16px;margin-bottom:8px;">${addr}</h2>
       <div style="color:var(--text-muted);font-size:12px;line-height:1.6;">
-        <div><strong>Dato:</strong> ${i.inspection_date}</div>
-        ${i.is_external ? `<div><strong>Ekstern:</strong> ${i.external_firma}</div>` : ''}
-        ${i.work_order ? `<div><strong>Arbeidsordre:</strong> ${i.work_order}</div>` : ''}
+        <div><strong>Dato:</strong> ${date}</div>
+        ${isLocal ? '<div><strong>Status:</strong> Lokalt (ikkje synka)</div>' : ''}
+        ${isExternal ? `<div><strong>Ekstern:</strong> ${i.external_firma || i.form?.externalFirma || ''}</div>` : ''}
+        ${workOrder ? `<div><strong>Arbeidsordre:</strong> ${workOrder}</div>` : ''}
       </div>
     </div>
-    
+
     <div class="stats" style="margin-bottom:10px;">
-      <div class="stat"><div class="stat-value">${i.checked_items || 0}</div><div class="stat-label">Sjekka</div></div>
-      <div class="stat"><div class="stat-value red">${i.deviation_count || 0}</div><div class="stat-label">Avvik</div></div>
-      <div class="stat"><div class="stat-value green">${i.corrected_count || 0}</div><div class="stat-label">Utbetra</div></div>
+      <div class="stat"><div class="stat-value">${checkedItems || 0}</div><div class="stat-label">Sjekka</div></div>
+      <div class="stat"><div class="stat-value red">${devCount || 0}</div><div class="stat-label">Avvik</div></div>
+      <div class="stat"><div class="stat-value green">${correctedCount || 0}</div><div class="stat-label">Utbetra</div></div>
     </div>
-    
+
     <button class="btn btn-primary" data-action="viewReport">📄 Vis rapport</button>
-    <button class="btn btn-secondary" data-action="downloadReport">📥 Last ned Word</button>
+    <button class="btn btn-secondary" data-action="${isLocal ? 'downloadLocalReport' : 'downloadReport'}">📥 Last ned Word</button>
+    ${isLocal && state.isOnline ? '<button class="btn btn-secondary" data-action="syncThisLocal" style="margin-top:8px;">🔄 Synk denne</button>' : ''}
   `;
 }
 
@@ -1231,9 +1375,6 @@ function renderModal() {
 // EVENT LISTENERS
 // ============================================
 function attachEvents() {
-  // Helpers for auto-tekst i kommentar (OK/IA)
-  const isAutoText = (val, t) => (val || '').trim().toUpperCase() === String(t).trim().toUpperCase();
-
   // Navigation
   document.querySelectorAll('[data-view]').forEach(el => {
     el.onclick = () => {
@@ -1267,6 +1408,41 @@ function attachEvents() {
         case 'saveModal': state.modal = 'save'; break;
         case 'saveOnly': await saveInspection(false); return;
         case 'saveDownload': await saveInspection(true); return;
+
+        case 'downloadPending': {
+          const id = el.dataset.localid;
+          const insp = state.pendingSync.find(p => p.localId === id);
+          if (insp) downloadWord(insp);
+          return;
+        }
+        case 'viewPending': {
+          const id = el.dataset.localid;
+          const insp = state.pendingSync.find(p => p.localId === id);
+          if (insp) {
+            state.viewInspection = { ...insp, __local: true };
+            state.view = 'detail';
+          }
+          break;
+        }
+        case 'cancelSync':
+          state.cancelSyncRequested = true;
+          showToast('⛔ Stoppar synk…', 'warning');
+          break;
+        case 'downloadLocalReport':
+          downloadWord(state.viewInspection);
+          return;
+        case 'syncThisLocal': {
+          const id = state.viewInspection.localId || state.viewInspection.id;
+          if (id) {
+            if (!state.pendingSync.find(p => p.localId === id)) {
+              state.pendingSync.unshift(state.viewInspection);
+              saveLocal('pendingSync', state.pendingSync);
+            }
+            await syncPendingData(true);
+          }
+          return;
+        }
+
         case 'closeModal': state.modal = null; break;
         case 'reset': if (confirm('Nullstille?')) resetForm(); break;
         case 'back': state.view = 'search'; state.viewInspection = null; break;
@@ -1304,24 +1480,10 @@ function attachEvents() {
       if (item) {
         item.checked = !item.checked;
 
-        // Auto: når ein kryssar av (utan avvik/IA), sett kommentar til "OK" (dersom tom eller auto-OK)
-        if (item.checked) {
-          if (!item.deviation && !item.ia) {
-            if (!item.comment || isAutoText(item.comment, 'OK')) item.comment = 'OK';
-          } else {
-            // Dersom ein går over til IA/avvik, rydd vekk auto-OK
-            if (isAutoText(item.comment, 'OK')) item.comment = '';
-          }
-        } else {
-          // Når ein fjernar avkryssing: fjern auto-OK
-          if (isAutoText(item.comment, 'OK')) item.comment = '';
-        }
-
         // Dersom ein fjernar avkryssing, skal IA også fjernast
-        if (!item.checked && item.ia) {
-          item.ia = false;
-          if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
-        }
+        if (!item.checked && item.ia) item.ia = false;
+
+        applyAutoComment(item);
         render();
       }
     };
@@ -1343,8 +1505,7 @@ function attachEvents() {
         item.deviation = false;
         item.corrected = false;
         item.installer = false;
-        // Overstyr auto-OK eller tom kommentar
-        if (!item.comment || isAutoText(item.comment, 'OK')) item.comment = 'IA';
+        applyAutoComment(item);
 
         // Hoppe til neste item (2.1 -> 2.2 osv.)
         const idx = state.items.findIndex(i => i.id === item.id);
@@ -1357,12 +1518,8 @@ function attachEvents() {
         }
       } else {
         // Rydd opp kommentar dersom den berre var "IA"
-        if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
-
-        // Dersom punktet framleis er avkryssa og ikkje avvik: sett auto-OK dersom tom
-        if (item.checked && !item.deviation) {
-          if (!item.comment) item.comment = 'OK';
-        }
+        if (isAutoIA(item.comment)) item.comment = '';
+        applyAutoComment(item);
       }
 
       render();
@@ -1378,19 +1535,12 @@ function attachEvents() {
         // Avvik og IA kan ikkje kombinerast
         if (!item.deviation && item.ia) {
           item.ia = false;
-          if ((item.comment || '').trim().toUpperCase() === 'IA') item.comment = '';
+          if (isAutoIA(item.comment)) item.comment = '';
+        applyAutoComment(item);
         }
-
-        // Dersom ein slår på avvik: rydd vekk auto-OK
-        if (!item.deviation && isAutoText(item.comment, 'OK')) item.comment = '';
-
         item.deviation = !item.deviation;
         if (!item.deviation) { item.corrected = false; item.installer = false; }
-
-        // Dersom avvik blir slått AV og punktet er avkryssa (utan IA): sett auto-OK dersom tom
-        if (!item.deviation && item.checked && !item.ia) {
-          if (!item.comment) item.comment = 'OK';
-        }
+        applyAutoComment(item);
         render();
       }
     };
@@ -1438,22 +1588,43 @@ function attachEvents() {
     };
   });
   
+  // Lokal inspeksjon (ikkje synk) - ligg i pendingSync
+  document.querySelectorAll('[data-local]').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.local;
+      const insp = state.pendingSync.find(p => p.localId === id);
+      if (insp) {
+        state.viewInspection = { ...insp, __local: true };
+        state.view = 'detail';
+        render();
+      }
+    };
+  });
+
   // Inspection detail
   document.querySelectorAll('[data-insp]').forEach(el => {
     el.onclick = async () => {
       const insp = state.inspections.find(i => i.id === el.dataset.insp);
       if (insp) {
-        // Hent items for denne kontrollen
-        try {
-          const { data: items } = await supabase
-            .from('inspection_items')
-            .select('*')
-            .eq('inspection_id', insp.id);
-          insp.items = items || [];
-        } catch(e) {
-          console.error('Kunne ikkje hente items:', e);
+        // Hent items for denne kontrollen (med timeout)
+        if (supabase && state.isOnline) {
+          try {
+            const { data: items, error } = await withTimeout(
+              supabase
+                .from('inspection_items')
+                .select('*')
+                .eq('inspection_id', insp.id),
+              12000,
+              'fetch inspection_items'
+            );
+            if (error) throw error;
+            insp.items = items || [];
+          } catch(e) {
+            console.error('Kunne ikkje hente items:', e);
+            showToast('⚠️ Klarte ikkje hente detaljer (nett/RLS)', 'warning');
+          }
         }
-        state.viewInspection = insp;
+        state.viewInspection = { ...insp, __local: false };
         state.view = 'detail';
         render();
       }
