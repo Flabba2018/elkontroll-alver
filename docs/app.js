@@ -1651,8 +1651,8 @@ function attachEvents() {
     };
   });
   
-  // Actions
-  document.querySelectorAll('[data-action]').forEach(el => {
+  // Actions (ekskluder select-element som har eigen handler)
+  document.querySelectorAll('[data-action]:not(select)').forEach(el => {
     el.onclick = async () => {
       const a = el.dataset.action;
       switch(a) {
