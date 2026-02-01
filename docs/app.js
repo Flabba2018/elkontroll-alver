@@ -1867,15 +1867,15 @@ function renderControl() {
       <h3>📍 Adresse</h3>
       <button class="btn btn-success" data-action="gps">📍 Hent frå GPS</button>
       <label class="label">Gateadresse</label>
-      <input class="input" id="address" placeholder="Adresse..." value="${state.form.address}">
+      <input class="input" id="address" placeholder="Adresse..." value="${escapeHTML(state.form.address)}">
       <label class="label">Eining / H-nr</label>
       <div style="display:flex;gap:6px;">
-        <input class="input" id="suffix" style="flex:1;" placeholder="H0201, Leil. A..." value="${state.form.suffix}">
+        <input class="input" id="suffix" style="flex:1;" placeholder="H0201, Leil. A..." value="${escapeHTML(state.form.suffix)}">
         <button class="btn btn-secondary btn-small" data-action="unitModal">📋</button>
       </div>
       <div style="display:flex;gap:8px;">
-        <div style="flex:1;"><label class="label">Dato</label><input class="input" type="date" id="date" value="${state.form.date}"></div>
-        <div style="flex:1;"><label class="label">Arbeidsordre</label><input class="input" id="workOrder" placeholder="Valfritt" value="${state.form.workOrder}"></div>
+        <div style="flex:1;"><label class="label">Dato</label><input class="input" type="date" id="date" value="${escapeHTML(state.form.date)}"></div>
+        <div style="flex:1;"><label class="label">Arbeidsordre</label><input class="input" id="workOrder" placeholder="Valfritt" value="${escapeHTML(state.form.workOrder)}"></div>
       </div>
     </div>
     
@@ -1883,9 +1883,9 @@ function renderControl() {
       <div class="external-card">
         <h3>🔧 Ekstern elektrikar</h3>
         <label class="label">Firma</label>
-        <input class="input" id="externalFirma" placeholder="Firma..." value="${state.form.externalFirma}">
+        <input class="input" id="externalFirma" placeholder="Firma..." value="${escapeHTML(state.form.externalFirma)}">
         <label class="label">Kontaktperson</label>
-        <input class="input" id="externalContact" placeholder="Namn..." value="${state.form.externalContact}">
+        <input class="input" id="externalContact" placeholder="Namn..." value="${escapeHTML(state.form.externalContact)}">
       </div>
     ` : ''}
     
@@ -1943,10 +1943,10 @@ function renderControl() {
         <button class="btn btn-small ${state.form.netType === 'TT' ? '' : 'btn-ghost'}" data-nettype="TT" style="${state.form.netType === 'TT' ? 'background:var(--primary);color:#fff;' : ''}">TT (230V)</button>
       </div>
       <div class="measurements">
-        <div><label class="label">Spenning</label><input class="input" id="voltage" placeholder="${state.form.netType === 'TN' ? '400V' : '230V'}" value="${state.form.voltage}"></div>
-        <div><label class="label">Isolasjon</label><input class="input" id="insulation" placeholder=">0,5MΩ" value="${state.form.insulation}"></div>
-        <div><label class="label">Kontinuitet</label><input class="input" id="continuity" placeholder="OK" value="${state.form.continuity}"></div>
-        <div><label class="label">Jordfeilbr.</label><input class="input" id="rcd" placeholder="OK" value="${state.form.rcd}"></div>
+        <div><label class="label">Spenning</label><input class="input" id="voltage" placeholder="${state.form.netType === 'TN' ? '400V' : '230V'}" value="${escapeHTML(state.form.voltage)}"></div>
+        <div><label class="label">Isolasjon</label><input class="input" id="insulation" placeholder=">0,5MΩ" value="${escapeHTML(state.form.insulation)}"></div>
+        <div><label class="label">Kontinuitet</label><input class="input" id="continuity" placeholder="OK" value="${escapeHTML(state.form.continuity)}"></div>
+        <div><label class="label">Jordfeilbr.</label><input class="input" id="rcd" placeholder="OK" value="${escapeHTML(state.form.rcd)}"></div>
       </div>
     </div>
     
@@ -1962,7 +1962,7 @@ function renderControl() {
         <input type="checkbox" ${state.form.sentInstaller ? 'checked' : ''}><span>Sendt til installatør</span>
       </div>
       <label class="label" style="margin-top:10px;">Tilleggskommentar</label>
-      <textarea class="textarea" id="summary" placeholder="Oppsummering...">${state.form.summary}</textarea>
+      <textarea class="textarea" id="summary" placeholder="Oppsummering...">${escapeHTML(state.form.summary)}</textarea>
     </div>
     
     <button class="btn btn-primary" data-action="saveModal">💾 Lagre kontroll</button>
@@ -2009,7 +2009,7 @@ function renderItem(item) {
               <div class="check-option ${item.installer ? 'installer' : ''}" data-inst="${item.id}">🔧 Krev inst.</div>
             ` : ''}
           </div>
-          <input class="comment-input" data-comment="${item.id}" placeholder="${item.deviation ? 'Beskriv avviket...' : 'Kommentar...'}" value="${item.comment || ''}">
+          <input class="comment-input" data-comment="${item.id}" placeholder="${item.deviation ? 'Beskriv avviket...' : 'Kommentar...'}" value="${escapeHTML(item.comment || '')}">
         </div>
       </div>
     </div>
@@ -2052,8 +2052,8 @@ function renderSearch() {
     ` : results.map(i => `
       <div class="card history-item" ${i.__local ? `data-local="${i.localId || i.id}"` : `data-insp="${i.id}"`}>
         <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-          <strong style="font-size:14px;">${i.full_address || i.address}</strong>
-          <span style="color:#64748b;font-size:11px;">${i.inspection_date || i.date || ''}</span>
+          <strong style="font-size:14px;">${escapeHTML(i.full_address || i.address)}</strong>
+          <span style="color:#64748b;font-size:11px;">${escapeHTML(i.inspection_date || i.date || '')}</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
           ${i.__local ? '<span class="badge badge-gray">Lokalt</span>' : ''}
@@ -2097,13 +2097,13 @@ function renderDetail() {
     <button class="btn btn-secondary btn-small" data-action="back" style="margin-bottom:12px;">← Tilbake</button>
 
     <div class="card">
-      <h2 style="font-size:16px;margin-bottom:8px;">${addr}</h2>
+      <h2 style="font-size:16px;margin-bottom:8px;">${escapeHTML(addr)}</h2>
       <div style="color:var(--text-muted);font-size:12px;line-height:1.6;">
-        <div><strong>Dato:</strong> ${date}</div>
-        <div><strong>Nett:</strong> <span style="color:${netType === 'TN' ? 'var(--danger)' : 'var(--primary)'};font-weight:600;">${netType} (${netType === 'TN' ? '400V' : '230V'})</span></div>
+        <div><strong>Dato:</strong> ${escapeHTML(date)}</div>
+        <div><strong>Nett:</strong> <span style="color:${netType === 'TN' ? 'var(--danger)' : 'var(--primary)'};font-weight:600;">${escapeHTML(netType)} (${netType === 'TN' ? '400V' : '230V'})</span></div>
         ${isLocal ? '<div><strong>Status:</strong> Lokalt (ikkje synka)</div>' : ''}
-        ${isExternal ? `<div><strong>Ekstern:</strong> ${i.external_firma || i.form?.externalFirma || ''}</div>` : ''}
-        ${workOrder ? `<div><strong>Arbeidsordre:</strong> ${workOrder}</div>` : ''}
+        ${isExternal ? `<div><strong>Ekstern:</strong> ${escapeHTML(i.external_firma || i.form?.externalFirma || '')}</div>` : ''}
+        ${workOrder ? `<div><strong>Arbeidsordre:</strong> ${escapeHTML(workOrder)}</div>` : ''}
       </div>
     </div>
 
