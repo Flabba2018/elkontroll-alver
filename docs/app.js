@@ -302,12 +302,19 @@ async function refreshMfaState() {
     const { data, error } = await withTimeout(client.auth.mfa.listFactors(), 8000, 'auth.mfa.listFactors');
     if (error) throw error;
 
-    // data.totp er typisk lista vi treng
-    const totp = Array.isArray(data?.totp) ? data.totp : [];
-    state.mfa.factors = totp;
-    state.mfa.hasFactor = totp.length > 0;
+    // Vi bryr oss primært om TOTP-faktorer
+    const allTotp = Array.isArray(data?.totp) ? data.totp : [];
+    
+    // Filtrer ut berre dei som er verifiserte for "hasFactor"
+    // unverified faktorer er uferdige enrollments
+    const verified = allTotp.filter(f => f.status === 'verified');
+    
+    state.mfa.factors = verified;
+    state.mfa.hasFactor = verified.length > 0;
     state.mfa.aal = getCurrentAALFromSession(state.auth.session);
     state.mfa.error = null;
+    
+    console.log('🔐 MFA State:', { verified: verified.length, total: allTotp.length, aal: state.mfa.aal });
   } catch (e) {
     console.warn('⚠️ MFA listFactors feila:', e);
     state.mfa.factors = [];
@@ -2186,8 +2193,10 @@ function renderSettings() {
           <label class="label" style="margin-top:10px;">Kode</label>
           <input class="input" id="mfaEnrollCode" inputmode="numeric" placeholder="123456" autocomplete="one-time-code">
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-            <button class="btn btn-small btn-primary" data-action="mfaEnrollComplete">✅ Fullfør</button>
-            <button class="btn btn-small btn-ghost" data-action="mfaEnrollCancel">Avbryt</button>
+            <button class="btn btn-small btn-primary" data-action="mfaEnrollComplete" ${state.mfa.isBusy ? 'disabled' : ''}>
+              ${state.mfa.isBusy ? '⏳ Verifiserer...' : '✅ Fullfør'}
+            </button>
+            <button class="btn btn-small btn-ghost" data-action="mfaEnrollCancel" ${state.mfa.isBusy ? 'disabled' : ''}>Avbryt</button>
           </div>
         </div>
       ` : ''}
