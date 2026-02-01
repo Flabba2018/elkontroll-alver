@@ -37,8 +37,18 @@ function renderMfaQr(qr) {
   const s = String(qr || '').trim();
   if (!s) return '';
 
-  // Inline SVG
-  if (s.startsWith('<svg') || s.includes('<svg')) {
+  // Dersom data-URI med SVG: hent ut sjølve SVG-koden og rendr inline (for å unngå data-uri problem i UI)
+  if (s.startsWith('data:image/svg+xml') && s.includes('<svg')) {
+    const svgContent = s.substring(s.indexOf('<svg'));
+    return `
+      <div style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+        ${svgContent}
+      </div>
+    `;
+  }
+
+  // Rein SVG-markup
+  if (s.startsWith('<svg')) {
     return `
       <div style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
         ${s}
@@ -46,7 +56,7 @@ function renderMfaQr(qr) {
     `;
   }
 
-  // Data URL / bilde URL
+  // Andre bilde-URLar (f.eks. png base64)
   return `<img src="${escapeHTML(s)}" alt="MFA QR" style="width:180px;height:180px;border-radius:10px;border:1px solid var(--border);background:#fff;"/>`;
 }
 
