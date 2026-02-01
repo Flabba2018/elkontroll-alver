@@ -339,16 +339,29 @@ async function verifyMfaCode(code) {
   const clean = String(code || '').trim().replace(/\s+/g, '');
   if (!clean) throw new Error('Skriv inn koden frå Authenticator-appen.');
 
-  const { error } = await withTimeout(
+  // Bruk data frå verify response for å oppdatere session direkte
+  const { data, error } = await withTimeout(
     client.auth.mfa.verify({ factorId: c.factorId, challengeId: c.challengeId, code: clean }),
     12000,
     'auth.mfa.verify'
   );
   if (error) throw error;
 
-  // Oppdater session og MFA-status
-  const { data: sessData } = await client.auth.getSession();
-  state.auth.session = sessData?.session || state.auth.session;
+  // VIKTIG: verify returnerer ny session (access_token) med AAL2-status.
+  // Vi må manuelt sette session her for å unngå race condition med getSession()
+  if (data?.access_token) {
+    const { data: setSessionData, error: setSessionError } = await client.auth.setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token
+    });
+    if (!setSessionError) {
+      state.auth.session = setSessionData.session;
+    }
+  } else {
+    // Fallback: hent ny session
+    const { data: sessData } = await client.auth.getSession();
+    state.auth.session = sessData?.session || state.auth.session;
+  }
 
   await refreshMfaState();
   state.mfa.challenge = null;
